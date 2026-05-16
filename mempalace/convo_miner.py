@@ -20,6 +20,7 @@ from .normalize import normalize
 from .palace import (
     NORMALIZE_VERSION,
     SKIP_DIRS,
+    _metadata_matches_extract_mode,
     file_already_mined,
     get_collection,
     mine_lock,
@@ -116,9 +117,7 @@ def _source_file_delete_ids(collection, source_file: str, extract_mode: str) -> 
         batch_ids = batch.get("ids") or []
         metadatas = batch.get("metadatas") or []
         for drawer_id, meta in zip(batch_ids, metadatas):
-            meta = meta or {}
-            stored_mode = meta.get("extract_mode")
-            if stored_mode == extract_mode or (extract_mode == "exchange" and stored_mode is None):
+            if _metadata_matches_extract_mode(meta or {}, extract_mode):
                 ids.append(drawer_id)
         if not batch_ids:
             break
