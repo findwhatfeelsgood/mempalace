@@ -601,7 +601,7 @@ def mine_convos(
         if extract_mode == "general":
             from .general_extractor import extract_memories
 
-            chunks = extract_memories(content)
+            chunks = extract_memories(content, chunk_size=cfg_chunk_size)
             # Each chunk already has memory_type; use it as the room name
         else:
             chunks = chunk_exchanges(

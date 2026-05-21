@@ -1103,7 +1103,18 @@ def tool_follow_tunnels(wing: str, room: str):
 def tool_add_drawer(
     wing: str, room: str, content: str, source_file: str = None, added_by: str = "mcp"
 ):
-    """File verbatim content into a wing/room. Checks for duplicates first."""
+    """File verbatim content into a wing/room. Checks for duplicates first.
+
+    Content above ``chunk_size`` is split into bounded per-chunk drawers
+    via a single batched upsert. Each chunk carries ``parent_drawer_id``
+    linkage and ``chunk_index`` metadata so search can rejoin them. The
+    returned ``drawer_id`` is the LOGICAL group handle on the chunked
+    path; physical drawer ids are in ``chunk_ids`` (#1539). To delete
+    or fetch the underlying drawers, iterate ``chunk_ids`` or query by
+    ``parent_drawer_id`` — ``tool_get_drawer(drawer_id)`` and
+    ``tool_delete_drawer(drawer_id)`` report "not found" on the chunked
+    path because no row is stored under the logical group id.
+    """
     global _metadata_cache
     try:
         wing = sanitize_name(wing, "wing")
@@ -1132,38 +1143,93 @@ def tool_add_drawer(
         },
     )
 
-    # Idempotency: if the deterministic ID already exists, return success as a no-op.
+    chunk_size = _config.chunk_size
+    base_meta = {
+        "wing": wing,
+        "room": room,
+        "source_file": source_file or "",
+        "added_by": added_by,
+        "filed_at": datetime.now().isoformat(),
+    }
+
+    # Idempotency. Three cases to detect a prior committed write:
+    # (a) Single-doc path: drawer_id row exists (the only id used).
+    # (b) Chunked path: probe the LAST chunk id — its presence implies
+    #     every earlier chunk also landed, since the batched upsert
+    #     is all-or-nothing.
+    # (c) Legacy pre-#1539 single-row write of oversized content under
+    #     drawer_id: probe drawer_id alongside the last chunk id so a
+    #     re-call with identical oversized content does not duplicate
+    #     the legacy row by adding fresh chunks under different ids.
+    if len(content) <= chunk_size:
+        idempotency_probe_ids = [drawer_id]
+    else:
+        last_chunk_idx = (len(content) - 1) // chunk_size
+        idempotency_probe_ids = [drawer_id, f"{drawer_id}_chunk_{last_chunk_idx:06d}"]
     try:
-        existing = col.get(ids=[drawer_id], include=[])
+        existing = col.get(ids=idempotency_probe_ids, include=[])
         if existing.ids:
             return {"success": True, "reason": "already_exists", "drawer_id": drawer_id}
     except Exception:
-        logger.debug("Idempotency pre-check failed for %s", drawer_id, exc_info=True)
+        logger.debug("Idempotency pre-check failed for %s", idempotency_probe_ids, exc_info=True)
 
     try:
-        col.upsert(
-            ids=[drawer_id],
-            documents=[content],
-            metadatas=[
-                {
-                    "wing": wing,
-                    "room": room,
-                    "source_file": source_file or "",
-                    "chunk_index": 0,
-                    "added_by": added_by,
-                    "filed_at": datetime.now().isoformat(),
-                }
-            ],
-        )
-        inserted = col.get(ids=[drawer_id], include=[])
+        if len(content) <= chunk_size:
+            col.upsert(
+                ids=[drawer_id],
+                documents=[content],
+                metadatas=[{**base_meta, "chunk_index": 0}],
+            )
+            inserted = col.get(ids=[drawer_id], include=[])
+            if not inserted.ids:
+                raise RuntimeError(
+                    "Drawer write was acknowledged but the new ID is not readable. "
+                    "The palace index may be stale; run reconnect or repair."
+                )
+            _metadata_cache = None
+            logger.info(f"Filed drawer: {drawer_id} → {wing}/{room}")
+            return {
+                "success": True,
+                "drawer_id": drawer_id,
+                "wing": wing,
+                "room": room,
+                "chunks": 1,
+            }
+
+        # Oversized content: split into bounded per-chunk drawers so the
+        # embedding model never sees a document above ``chunk_size``.
+        # Single batched ``upsert`` so the embedding pass either commits
+        # every chunk or none — no half-written palace if the embedding
+        # model fails mid-loop (#1539).
+        chunk_ids: list[str] = []
+        chunk_docs: list[str] = []
+        chunk_metas: list[dict] = []
+        for i in range(0, len(content), chunk_size):
+            chunk_idx = i // chunk_size
+            chunk_ids.append(f"{drawer_id}_chunk_{chunk_idx:06d}")
+            chunk_docs.append(content[i : i + chunk_size])
+            chunk_metas.append(
+                {**base_meta, "chunk_index": chunk_idx, "parent_drawer_id": drawer_id}
+            )
+        col.upsert(ids=chunk_ids, documents=chunk_docs, metadatas=chunk_metas)
+        # Probe the LAST chunk id, not the first — its presence confirms
+        # the whole batch landed, not just the leading row.
+        inserted = col.get(ids=[chunk_ids[-1]], include=[])
         if not inserted.ids:
             raise RuntimeError(
                 "Drawer write was acknowledged but the new ID is not readable. "
                 "The palace index may be stale; run reconnect or repair."
             )
         _metadata_cache = None
-        logger.info(f"Filed drawer: {drawer_id} → {wing}/{room}")
-        return {"success": True, "drawer_id": drawer_id, "wing": wing, "room": room}
+        logger.info(f"Filed drawer: {drawer_id} → {wing}/{room} ({len(chunk_ids)} chunks)")
+        return {
+            "success": True,
+            "drawer_id": drawer_id,
+            "wing": wing,
+            "room": room,
+            "chunks": len(chunk_ids),
+            "chunk_ids": chunk_ids,
+        }
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -1579,29 +1645,76 @@ def tool_diary_write(agent_name: str, entry: str, topic: str = "general", wing: 
         # semantic search quality. For now, store raw AAAK in metadata so it's
         # preserved, and keep the document as-is for embedding (even though
         # compressed AAAK degrades embedding quality).
-        col.add(
-            ids=[entry_id],
-            documents=[entry],
-            metadatas=[
+        base_metadata = {
+            "wing": wing,
+            "room": room,
+            "hall": "hall_diary",
+            "topic": topic,
+            "type": "diary_entry",
+            "agent": agent_name,
+            "filed_at": now.isoformat(),
+            "date": now.strftime("%Y-%m-%d"),
+        }
+        chunk_size = _config.chunk_size
+        if len(entry) <= chunk_size:
+            col.add(
+                ids=[entry_id],
+                documents=[entry],
+                metadatas=[{**base_metadata, "chunk_index": 0}],
+            )
+            logger.info(f"Diary entry: {entry_id} → {wing}/diary/{topic}")
+            return {
+                "success": True,
+                "entry_id": entry_id,
+                "agent": agent_name,
+                "topic": topic,
+                "timestamp": now.isoformat(),
+                "chunks": 1,
+            }
+
+        # Oversized entry: split into bounded per-chunk drawers so the
+        # embedding model never sees a document above ``chunk_size``.
+        # Every chunk carries ``parent_entry_id`` so search can rejoin
+        # them and ``chunk_index`` for ordered reconstruction (#1539).
+        # Note on ``entry_id`` in the return value: for the chunked
+        # path the returned ``entry_id`` is the LOGICAL group handle
+        # (no drawer is stored under that exact id). The physical
+        # drawer ids are in ``chunk_ids``. Callers wanting to fetch
+        # by id should iterate ``chunk_ids``; callers wanting to
+        # query by metadata can filter on ``parent_entry_id``.
+        # Use a single batched ``add`` so the embedding pass either
+        # commits all chunks or none — avoids a half-written palace
+        # if the embedding model fails mid-loop. ``col.add`` (not
+        # ``upsert``) is intentional here: ``entry_id`` is timestamp-
+        # based with microsecond precision, so every call generates a
+        # fresh id and a duplicate is by definition a same-microsecond
+        # clash that should surface as an error rather than silently
+        # overwrite the prior entry (cf. ``tool_add_drawer`` whose
+        # content-hash ids are deliberately idempotent and use upsert).
+        chunk_ids: list[str] = []
+        chunk_docs: list[str] = []
+        chunk_metas: list[dict] = []
+        for i in range(0, len(entry), chunk_size):
+            chunk_idx = i // chunk_size
+            chunk_ids.append(f"{entry_id}_chunk_{chunk_idx:06d}")
+            chunk_docs.append(entry[i : i + chunk_size])
+            chunk_metas.append(
                 {
-                    "wing": wing,
-                    "room": room,
-                    "hall": "hall_diary",
-                    "topic": topic,
-                    "type": "diary_entry",
-                    "agent": agent_name,
-                    "filed_at": now.isoformat(),
-                    "date": now.strftime("%Y-%m-%d"),
+                    **base_metadata,
+                    "chunk_index": chunk_idx,
+                    "parent_entry_id": entry_id,
                 }
-            ],
-        )
-        logger.info(f"Diary entry: {entry_id} → {wing}/diary/{topic}")
+            )
+        col.add(ids=chunk_ids, documents=chunk_docs, metadatas=chunk_metas)
+        logger.info(f"Diary entry: {entry_id} → {wing}/diary/{topic} ({len(chunk_ids)} chunks)")
         return {
             "success": True,
             "entry_id": entry_id,
             "agent": agent_name,
             "topic": topic,
             "timestamp": now.isoformat(),
+            "chunks": len(chunk_ids),
+            "chunk_ids": chunk_ids,
         }
     except Exception as e:
         return {"success": False, "error": str(e)}
