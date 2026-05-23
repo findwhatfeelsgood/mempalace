@@ -427,3 +427,169 @@ class TestReadSlice:
         )
         out = read_slice(cand, requested_line_start=1, requested_line_end=10)
         assert out == ""
+
+
+# Gemini PR #1588 review fixes — negative-first per /adversarial-review
+
+
+class TestResolveBySourceTwoStepFetch:
+    """Fallback scan must fetch metadatas first, then fetch documents only
+    for matched IDs. Pre-fix, the scan fetched all documents up front —
+    O(N) memory bloat on large palaces.
+    """
+
+    def test_fallback_scan_does_not_include_documents_in_first_fetch(self):
+        from unittest.mock import MagicMock
+        from mempalace.reader import ParsedPointer, resolve_drawers
+
+        col = MagicMock()
+        col.get.side_effect = [
+            {"ids": [], "documents": [], "metadatas": []},
+            {
+                "ids": ["d1"],
+                "documents": None,
+                "metadatas": [{"source_file": "/proj/chat.md", "chunk_index": 0}],
+            },
+            {
+                "ids": ["d1"],
+                "documents": ["chunk content"],
+                "metadatas": [{"source_file": "/proj/chat.md", "chunk_index": 0}],
+            },
+        ]
+        parsed = ParsedPointer(
+            date=None,
+            line_start=None,
+            line_end=None,
+            source_file="chat.md",
+            drawer_ids=[],
+        )
+        resolve_drawers(col, parsed)
+
+        assert col.get.call_count >= 2
+        scan_kwargs = col.get.call_args_list[1].kwargs
+        include = scan_kwargs.get("include", [])
+        assert "documents" not in include, (
+            f"fallback scan must NOT request documents; got include={include!r}"
+        )
+        assert "metadatas" in include
+
+    def test_fallback_fetches_documents_only_for_matched_ids(self):
+        from unittest.mock import MagicMock
+        from mempalace.reader import ParsedPointer, resolve_drawers
+
+        col = MagicMock()
+        col.get.side_effect = [
+            {"ids": [], "documents": [], "metadatas": []},
+            {
+                "ids": ["d1", "d2", "d3"],
+                "metadatas": [
+                    {"source_file": "/proj/match.md", "chunk_index": 0},
+                    {"source_file": "/proj/other.md", "chunk_index": 0},
+                    {"source_file": "/proj/match.md", "chunk_index": 1},
+                ],
+            },
+            {
+                "ids": ["d1", "d3"],
+                "documents": ["chunk 0", "chunk 1"],
+                "metadatas": [
+                    {"source_file": "/proj/match.md", "chunk_index": 0},
+                    {"source_file": "/proj/match.md", "chunk_index": 1},
+                ],
+            },
+        ]
+        parsed = ParsedPointer(
+            date=None,
+            line_start=None,
+            line_end=None,
+            source_file="match.md",
+            drawer_ids=[],
+        )
+        result = resolve_drawers(col, parsed)
+
+        assert col.get.call_count == 3
+        docs_kwargs = col.get.call_args_list[2].kwargs
+        requested_ids = docs_kwargs.get("ids", [])
+        assert set(requested_ids) == {"d1", "d3"}, (
+            f"docs-fetch must request only matched IDs; got {requested_ids!r}"
+        )
+        assert "documents" in docs_kwargs.get("include", [])
+        assert len(result) == 2
+        assert [c.chunk_index for c in result] == [0, 1]
+
+    def test_fallback_skips_documents_fetch_when_no_matches(self):
+        from unittest.mock import MagicMock
+        from mempalace.reader import ParsedPointer, resolve_drawers
+
+        col = MagicMock()
+        col.get.side_effect = [
+            {"ids": [], "documents": [], "metadatas": []},
+            {
+                "ids": ["d1"],
+                "metadatas": [{"source_file": "/proj/different.md", "chunk_index": 0}],
+            },
+        ]
+        parsed = ParsedPointer(
+            date=None,
+            line_start=None,
+            line_end=None,
+            source_file="missing.md",
+            drawer_ids=[],
+        )
+        result = resolve_drawers(col, parsed)
+        assert result == []
+        assert col.get.call_count == 2, (
+            f"expected 2 calls (no documents fetch on zero matches); got {col.get.call_count}"
+        )
+
+
+class TestCmdReadTTYHandling:
+    """When pointer is missing/dash AND stdin is a TTY, the CLI must error
+    and exit 1 instead of blocking on stdin.read().
+    """
+
+    def test_no_pointer_and_tty_stdin_exits_with_error(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from mempalace.cli import cmd_read
+
+        args = SimpleNamespace(pointer=None, drawer=None, all=False, palace=None)
+        with patch("mempalace.cli.sys.stdin") as mock_stdin:
+            mock_stdin.isatty.return_value = True
+            mock_stdin.read.side_effect = AssertionError("stdin.read() must NOT be called when TTY")
+            with pytest.raises(SystemExit) as excinfo:
+                cmd_read(args)
+            assert excinfo.value.code == 1
+
+    def test_dash_pointer_and_tty_stdin_exits_with_error(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from mempalace.cli import cmd_read
+
+        args = SimpleNamespace(pointer="-", drawer=None, all=False, palace=None)
+        with patch("mempalace.cli.sys.stdin") as mock_stdin:
+            mock_stdin.isatty.return_value = True
+            mock_stdin.read.side_effect = AssertionError(
+                "stdin.read() must NOT be called when TTY with '-' pointer"
+            )
+            with pytest.raises(SystemExit) as excinfo:
+                cmd_read(args)
+            assert excinfo.value.code == 1
+
+
+class TestTypeAnnotations:
+    """Specific type hints on public reader.py surface — list[str] /
+    list[DrawerCandidate] rather than bare list."""
+
+    def test_parsed_pointer_drawer_ids_field_typed_as_list_of_str(self):
+        from mempalace.reader import ParsedPointer
+
+        ann_str = str(ParsedPointer.__annotations__.get("drawer_ids"))
+        assert "str" in ann_str, f"drawer_ids must be list[str], got {ann_str!r}"
+
+    def test_resolve_drawers_return_type_annotation_is_specific(self):
+        from mempalace.reader import resolve_drawers
+
+        ann_str = str(resolve_drawers.__annotations__.get("return"))
+        assert "DrawerCandidate" in ann_str, (
+            f"resolve_drawers must return list[DrawerCandidate]; got {ann_str!r}"
+        )

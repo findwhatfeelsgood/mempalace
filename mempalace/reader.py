@@ -36,7 +36,7 @@ class ParsedPointer(NamedTuple):
     line_start: Optional[int]
     line_end: Optional[int]
     source_file: Optional[str]
-    drawer_ids: list
+    drawer_ids: list[str]
 
 
 class DrawerCandidate(NamedTuple):
@@ -167,7 +167,7 @@ def _validate_line_range(line_start: int, line_end: int) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def resolve_drawers(col, parsed: ParsedPointer) -> list:
+def resolve_drawers(col, parsed: ParsedPointer) -> list[DrawerCandidate]:
     """Find drawer records matching the parsed pointer.
 
     Two resolution modes:
@@ -187,13 +187,13 @@ def resolve_drawers(col, parsed: ParsedPointer) -> list:
     return []
 
 
-def _resolve_by_ids(col, drawer_ids: list) -> list:
+def _resolve_by_ids(col, drawer_ids: list[str]) -> list[DrawerCandidate]:
     """Fetch drawers by explicit id list."""
     try:
         result = col.get(ids=list(drawer_ids), include=["documents", "metadatas"])
     except Exception:
         return []
-    candidates = []
+    candidates: list[DrawerCandidate] = []
     for did, doc, meta in zip(
         result.get("ids") or [], result.get("documents") or [], result.get("metadatas") or []
     ):
@@ -211,15 +211,15 @@ def _resolve_by_ids(col, drawer_ids: list) -> list:
     return candidates
 
 
-def _resolve_by_source(col, source_file: str) -> list:
+def _resolve_by_source(col, source_file: str) -> list[DrawerCandidate]:
     """Scan all drawers and match by source-file basename or full path.
 
     Tries exact-match first (cheap chromadb ``where`` filter). If empty,
-    falls back to a full scan filtered by basename match — supports the
-    common case where the user typed only the file name as shown in
-    ``mempalace search`` output.
+    falls back to a metadatas-only scan filtered by basename match, then
+    fetches documents only for the matched IDs — avoids loading every
+    drawer's full text on large palaces.
     """
-    candidates: list = []
+    candidates: list[DrawerCandidate] = []
 
     # Try exact path first.
     try:
@@ -247,28 +247,45 @@ def _resolve_by_source(col, source_file: str) -> list:
     except Exception:
         pass
 
-    # Fallback: scan all drawers, basename-match.
+    # Fallback: scan metadatas only, identify matches, THEN fetch documents
+    # for just the matched IDs. On a 100K-drawer palace, this avoids
+    # pulling ~100 MB of document text we'd immediately discard.
     target_basename = Path(source_file).name
     try:
-        result = col.get(include=["documents", "metadatas"])
+        meta_result = col.get(include=["metadatas"])
     except Exception:
         return []
-    for did, doc, meta in zip(
-        result.get("ids") or [], result.get("documents") or [], result.get("metadatas") or []
-    ):
+    matched: list[tuple[str, dict]] = []
+    for did, meta in zip(meta_result.get("ids") or [], meta_result.get("metadatas") or []):
         meta = meta or {}
         full_path = meta.get("source_file", "")
         if Path(full_path).name == target_basename or full_path == source_file:
-            candidates.append(
-                DrawerCandidate(
-                    drawer_id=did,
-                    source_file=full_path,
-                    chunk_index=int(meta.get("chunk_index", 0) or 0),
-                    line_start=_optional_int(meta.get("line_start")),
-                    line_end=_optional_int(meta.get("line_end")),
-                    document=doc or "",
-                )
+            matched.append((did, meta))
+
+    if not matched:
+        return []
+
+    matched_ids = [did for did, _ in matched]
+    try:
+        doc_result = col.get(ids=matched_ids, include=["documents", "metadatas"])
+    except Exception:
+        return []
+    for did, doc, meta in zip(
+        doc_result.get("ids") or [],
+        doc_result.get("documents") or [],
+        doc_result.get("metadatas") or [],
+    ):
+        meta = meta or {}
+        candidates.append(
+            DrawerCandidate(
+                drawer_id=did,
+                source_file=meta.get("source_file", ""),
+                chunk_index=int(meta.get("chunk_index", 0) or 0),
+                line_start=_optional_int(meta.get("line_start")),
+                line_end=_optional_int(meta.get("line_end")),
+                document=doc or "",
             )
+        )
     candidates.sort(key=lambda c: c.chunk_index)
     return candidates
 

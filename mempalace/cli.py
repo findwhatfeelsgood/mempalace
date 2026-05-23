@@ -702,9 +702,18 @@ def cmd_read(args):
     from .palace import _open_collection_or_explain
     from .reader import format_drawer_menu, parse_pointer, read_slice, resolve_drawers
 
-    # Source the pointer from arg or stdin.
+    # Source the pointer from arg or stdin. Refuse to block on an
+    # interactive TTY — without a pipe or redirect, stdin.read() would
+    # hang silently with no prompt.
     pointer = args.pointer
     if pointer is None or pointer == "-":
+        if sys.stdin.isatty():
+            print(
+                "Error: no pointer provided. Pass as argument or pipe via stdin.\n"
+                'Example: mempalace read "2024-11-08:L42-L78 file.md"',
+                file=sys.stderr,
+            )
+            sys.exit(1)
         pointer = sys.stdin.read().strip()
     if not pointer:
         print(
