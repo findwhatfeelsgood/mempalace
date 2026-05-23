@@ -575,6 +575,33 @@ class TestCmdReadTTYHandling:
                 cmd_read(args)
             assert excinfo.value.code == 1
 
+    def test_no_pointer_and_none_stdin_exits_cleanly(self):
+        """``sys.stdin`` is None on Windows pythonw and some detached
+        daemon contexts. Calling ``.isatty()`` on None would raise
+        AttributeError — must instead exit 1 like the TTY case.
+        Gemini Pro adversarial review finding (#2)."""
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from mempalace.cli import cmd_read
+
+        args = SimpleNamespace(pointer=None, drawer=None, all=False, palace=None)
+        with patch("mempalace.cli.sys.stdin", None):
+            with pytest.raises(SystemExit) as excinfo:
+                cmd_read(args)
+            assert excinfo.value.code == 1
+
+    def test_dash_pointer_and_none_stdin_exits_cleanly(self):
+        """Same None-stdin guard applies to explicit ``-`` pointer."""
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from mempalace.cli import cmd_read
+
+        args = SimpleNamespace(pointer="-", drawer=None, all=False, palace=None)
+        with patch("mempalace.cli.sys.stdin", None):
+            with pytest.raises(SystemExit) as excinfo:
+                cmd_read(args)
+            assert excinfo.value.code == 1
+
 
 class TestTypeAnnotations:
     """Specific type hints on public reader.py surface — list[str] /

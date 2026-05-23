@@ -704,10 +704,13 @@ def cmd_read(args):
 
     # Source the pointer from arg or stdin. Refuse to block on an
     # interactive TTY — without a pipe or redirect, stdin.read() would
-    # hang silently with no prompt.
+    # hang silently. Also handle ``sys.stdin = None`` (Windows pythonw
+    # and some detached daemon contexts) — calling .isatty() on None
+    # would AttributeError; treat it as a non-readable stream and
+    # exit cleanly with the usage hint.
     pointer = args.pointer
     if pointer is None or pointer == "-":
-        if sys.stdin.isatty():
+        if sys.stdin is None or sys.stdin.isatty():
             print(
                 "Error: no pointer provided. Pass as argument or pipe via stdin.\n"
                 'Example: mempalace read "2024-11-08:L42-L78 file.md"',
