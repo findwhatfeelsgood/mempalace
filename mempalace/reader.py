@@ -308,7 +308,7 @@ def _optional_int(value: object) -> Optional[int]:
 _SNIPPET_MAX_CHARS = 120
 
 
-def format_drawer_menu(candidates: list) -> str:
+def format_drawer_menu(candidates: list[DrawerCandidate]) -> str:
     """Render the multi-drawer picker menu.
 
     Output shape (for a 3-candidate pointer):
