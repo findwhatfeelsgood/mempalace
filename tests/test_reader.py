@@ -376,6 +376,122 @@ class TestFormatDrawerMenu:
         assert "snippet one" in out
         assert "snippet three" in out
 
+    def test_menu_shows_all_distinct_basenames_when_multi_source(self):
+        """Multi-source pointer (shorthand ``date:L-L basename`` matching
+        files of the same basename in different directories) must label
+        ALL distinct source paths in the menu header, not just the first.
+
+        Pre-fix the menu silently showed only ``candidates[0].source_file``,
+        misleading the user about which files they were looking at.
+        """
+        from mempalace.reader import format_drawer_menu
+
+        cand1 = self._make_candidate("drawer_a1", "/proj_a/notes.md", 0, 1, 10, "alpha first")
+        cand2 = self._make_candidate("drawer_b1", "/proj_b/notes.md", 0, 1, 10, "bravo first")
+        out = format_drawer_menu([cand1, cand2])
+        # Both distinct full paths should appear so the user can
+        # disambiguate identically-named files in different dirs.
+        assert "/proj_a/notes.md" in out, (
+            f"menu must surface proj_a path when multi-source; got:\n{out}"
+        )
+        assert "/proj_b/notes.md" in out, (
+            f"menu must surface proj_b path when multi-source; got:\n{out}"
+        )
+
+    def test_menu_single_source_unchanged_basename_only(self):
+        """When all candidates share one source_file, the menu header
+        keeps the current single-basename behavior (no full path
+        regression for the common case)."""
+        from mempalace.reader import format_drawer_menu
+
+        cand1 = self._make_candidate("drawer_a", "/proj/notes.md", 0, 1, 10, "alpha")
+        cand2 = self._make_candidate("drawer_b", "/proj/notes.md", 1, 11, 20, "bravo")
+        out = format_drawer_menu([cand1, cand2])
+        # Header still shows the basename, not the full path, in single-source.
+        assert "Source: notes.md" in out
+        # Full path NOT in the header (basename-only convention preserved).
+        first_line = out.split("\n")[0]
+        assert "/proj/" not in first_line
+
+
+class TestResolveDrawersGroupsBySourceFile:
+    """Multi-source shorthand pointers (a basename matching files in
+    different directories) must produce candidates grouped by source_file,
+    not interleaved by chunk_index alone.
+
+    Pre-fix: sorting only by ``chunk_index`` interleaved chunks from
+    different source files: file_A[0], file_B[0], file_A[1], file_B[1].
+    User couldn't tell which chunk came from which file.
+
+    Post-fix: chunks group by source_file, then sort by chunk_index
+    within each group: file_A[0], file_A[1], file_B[0], file_B[1].
+    """
+
+    def test_multi_source_basename_match_groups_chunks_by_source(self):
+        from mempalace.reader import ParsedPointer, resolve_drawers
+
+        col = _fake_collection(
+            {
+                "a1": {
+                    "document": "proj_a chunk 0",
+                    "metadata": {
+                        "source_file": "/proj_a/notes.md",
+                        "chunk_index": 0,
+                    },
+                },
+                "b0": {
+                    "document": "proj_b chunk 0",
+                    "metadata": {
+                        "source_file": "/proj_b/notes.md",
+                        "chunk_index": 0,
+                    },
+                },
+                "a2": {
+                    "document": "proj_a chunk 1",
+                    "metadata": {
+                        "source_file": "/proj_a/notes.md",
+                        "chunk_index": 1,
+                    },
+                },
+                "b1": {
+                    "document": "proj_b chunk 1",
+                    "metadata": {
+                        "source_file": "/proj_b/notes.md",
+                        "chunk_index": 1,
+                    },
+                },
+            }
+        )
+        parsed = ParsedPointer(
+            date=None,
+            line_start=None,
+            line_end=None,
+            source_file="notes.md",
+            drawer_ids=[],
+        )
+        result = resolve_drawers(col, parsed)
+        # All four matched.
+        assert len(result) == 4
+        # Group by source_file, then chunk_index within each. The
+        # specific order between proj_a and proj_b groups can vary
+        # (depends on insertion order or sort), but WITHIN a group
+        # chunks must be contiguous and in chunk_index order.
+        sources_in_order = [c.source_file for c in result]
+        # All proj_a entries should be adjacent (no proj_b between them).
+        proj_a_indices = [i for i, s in enumerate(sources_in_order) if s == "/proj_a/notes.md"]
+        proj_b_indices = [i for i, s in enumerate(sources_in_order) if s == "/proj_b/notes.md"]
+        assert proj_a_indices == list(
+            range(proj_a_indices[0], proj_a_indices[0] + len(proj_a_indices))
+        ), f"proj_a chunks must be contiguous; got order {sources_in_order}"
+        assert proj_b_indices == list(
+            range(proj_b_indices[0], proj_b_indices[0] + len(proj_b_indices))
+        ), f"proj_b chunks must be contiguous; got order {sources_in_order}"
+        # Within each source, chunk_index ascending.
+        proj_a_chunks = [c.chunk_index for c in result if c.source_file == "/proj_a/notes.md"]
+        proj_b_chunks = [c.chunk_index for c in result if c.source_file == "/proj_b/notes.md"]
+        assert proj_a_chunks == sorted(proj_a_chunks)
+        assert proj_b_chunks == sorted(proj_b_chunks)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # read_slice — call extract_line_range on a candidate's document

@@ -323,7 +323,13 @@ def _resolve_by_source(col, source_file: str) -> list[DrawerCandidate]:
                 document=doc or "",
             )
         )
-    candidates.sort(key=lambda c: c.chunk_index)
+    # Group by source_file FIRST, then chunk_index within each group.
+    # A shorthand pointer (``date:L-L basename``) can match files of the
+    # same basename in different directories — interleaving their chunks
+    # in chunk_index order would mislead the user about which chunk came
+    # from which file. Grouping preserves "all of file A, then all of
+    # file B" rendering.
+    candidates.sort(key=lambda c: (c.source_file, c.chunk_index))
     return candidates
 
 
@@ -371,10 +377,25 @@ def format_drawer_menu(candidates: list[DrawerCandidate]) -> str:
 
     lines: list[str] = []
 
-    # Single source file across the closet pointer (true by construction —
-    # build_closet_lines is per-source). Show it once at the top.
-    source_basename = Path(candidates[0].source_file).name if candidates[0].source_file else "?"
-    lines.append(f"Source: {source_basename}")
+    # Source header: when all candidates share one source_file, show the
+    # basename (common case). When a shorthand pointer matched files of
+    # the same basename in DIFFERENT directories, the menu must surface
+    # every distinct full path so the user can disambiguate — otherwise
+    # the header lies about which files they're looking at.
+    distinct_sources = []
+    seen: set = set()
+    for c in candidates:
+        src = c.source_file or ""
+        if src and src not in seen:
+            distinct_sources.append(src)
+            seen.add(src)
+    if len(distinct_sources) <= 1:
+        source_basename = Path(candidates[0].source_file).name if candidates[0].source_file else "?"
+        lines.append(f"Source: {source_basename}")
+    else:
+        lines.append(f"Sources ({len(distinct_sources)} distinct paths):")
+        for src in distinct_sources:
+            lines.append(f"  - {src}")
 
     if len(candidates) == 1:
         lines.append("1 drawer in this pointer:")
