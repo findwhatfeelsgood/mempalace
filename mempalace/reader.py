@@ -26,6 +26,13 @@ from typing import NamedTuple, Optional
 
 logger = logging.getLogger(__name__)
 
+# Page size for the paginated metadata scan in ``_resolve_by_source``.
+# Mirrors ``palace.bulk_check_mined``'s page size convention. Distinct
+# from ``_chunked_get``'s ``batch=500`` (which is bounded by SQLite's
+# SQLITE_MAX_VARIABLE_NUMBER for bind parameters); the scan page size
+# is bounded only by per-batch memory.
+_SCAN_PAGE_SIZE = 1000
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Data types
@@ -274,7 +281,21 @@ def _resolve_by_source(col, source_file: str) -> list[DrawerCandidate]:
     falls back to a metadatas-only scan filtered by basename match, then
     fetches documents only for the matched IDs — avoids loading every
     drawer's full text on large palaces.
+
+    The match shape is disambiguated by the input: if ``source_file``
+    contains a path separator (``/`` or ``\\``), it's a FULL PATH and
+    we match drawers whose ``source_file`` metadata matches exactly. If
+    it's a bare basename (no separator), we match by ``Path(...).name``
+    only. This prevents a full-path input from accidentally including
+    drawers from other files of the same basename in different
+    directories.
     """
+    # Defensive — parse_pointer should never let an empty source_file
+    # reach us, but if a future caller bypasses parse_pointer this
+    # guard prevents an accidental whole-palace scan.
+    if not source_file:
+        return []
+
     candidates: list[DrawerCandidate] = []
 
     # Try exact path first.
@@ -322,20 +343,32 @@ def _resolve_by_source(col, source_file: str) -> list[DrawerCandidate]:
     # mirrors ``palace.bulk_check_mined`` (page size 1000, terminate
     # on empty-batch or offset >= count).
     target_basename = Path(source_file).name
+    # Distinguish full-path input from bare basename. A full path
+    # (containing ``/`` or ``\\``) must match exactly — otherwise
+    # passing ``/proj_a/notes.md`` would also pick up
+    # ``/proj_b/notes.md`` via the basename branch.
+    is_full_path = "/" in source_file or "\\" in source_file
     matched_ids: list[str] = []
     try:
         total = col.count()
         offset = 0
         while offset < total:
-            batch = col.get(limit=1000, offset=offset, include=["metadatas"])
+            batch = col.get(limit=_SCAN_PAGE_SIZE, offset=offset, include=["metadatas"])
             batch_ids = batch.get("ids") or []
+            if not batch_ids:
+                # Empty batch terminates the scan immediately — protects
+                # against chromadb returning an empty page mid-walk
+                # (e.g. transient deletion creates a gap).
+                break
             for did, meta in zip(batch_ids, batch.get("metadatas") or []):
                 meta = meta or {}
                 full_path = meta.get("source_file", "")
-                if Path(full_path).name == target_basename or full_path == source_file:
+                if is_full_path:
+                    is_match = full_path == source_file
+                else:
+                    is_match = Path(full_path).name == target_basename
+                if is_match:
                     matched_ids.append(did)
-            if not batch_ids:
-                break
             offset += len(batch_ids)
     except Exception as e:
         # Terminal failure — caller gets [] with no further recovery
