@@ -896,11 +896,20 @@ def _extract_entities_for_metadata(content: str) -> str:
     # Tier 4 linguistics cleanup — augment with spaCy NER for the same
     # window when the ``mempalace[nlp]`` extra is installed. spaCy hits
     # land at count 1+ because statistical NER is high-precision and
-    # doesn't need the >=2 frequency guard the regex path uses.
+    # doesn't need the >=2 frequency guard the regex path uses, but they
+    # ARE filtered through the same COCA content-word filter Tier 2
+    # applies to the regex path — spaCy can still surface common English
+    # content words ("Code", "Phase", "Line") as entities in context-poor
+    # sentences, and the COCA filter is the design promise that says
+    # "these aren't entity-worthy regardless of which pipeline found them."
     # ``extract_spacy_entities`` returns ``{}`` when spaCy isn't
     # available, so behavior is unchanged for users on the base install.
     for spacy_name in extract_spacy_entities(window):
-        if spacy_name not in _ENTITY_STOPLIST and len(spacy_name) > 2:
+        if (
+            spacy_name not in _ENTITY_STOPLIST
+            and spacy_name.lower() not in coca_filter
+            and len(spacy_name) > 2
+        ):
             matched.add(spacy_name)
 
     if not matched:

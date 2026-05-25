@@ -26,7 +26,6 @@ ONNX model (#1483) so installs stay slim and offline-friendly.
 from __future__ import annotations
 
 import functools
-import importlib
 import logging
 import os
 
@@ -68,16 +67,23 @@ def _spacy_available() -> bool:
     return True
 
 
+@functools.lru_cache(maxsize=1)
 def _resolve_model_name() -> str:
-    """Return the effective spaCy model name from env, or the default.
+    """Return the effective spaCy model name from env, or an empty string.
 
-    Empty/whitespace-only env values fall back to the default so a user
-    who sets ``MEMPALACE_SPACY_MODEL=`` in a .env file doesn't accidentally
-    pass an empty model name to ``spacy.load``.
+    Returns the trimmed value of ``MEMPALACE_SPACY_MODEL`` if set, or
+    ``""`` if the env var is missing, empty, or whitespace-only. The
+    caller is responsible for layering the default on top via
+    ``_resolve_model_name() or _DEFAULT_MODEL`` — keeping the resolver
+    silent about defaults makes "user did not configure" distinguishable
+    from "user explicitly set the default," per project convention.
+
+    Cached at ``maxsize=1`` because env vars don't change mid-process
+    under normal operation; tests that need to flip the value must call
+    ``_resolve_model_name.cache_clear()`` between assertions.
     """
     raw = os.environ.get(_ENV_VAR, "")
-    stripped = raw.strip()
-    return stripped if stripped else _DEFAULT_MODEL
+    return raw.strip()
 
 
 @functools.lru_cache(maxsize=4)
@@ -97,10 +103,7 @@ def _get_spacy_nlp(model_name: str):
     if not _spacy_available():
         return None
 
-    try:
-        spacy = importlib.import_module("spacy")
-    except (ImportError, ModuleNotFoundError):
-        return None
+    import spacy
 
     try:
         return spacy.load(model_name)
@@ -153,7 +156,7 @@ def extract_spacy_entities(text: str) -> dict[str, int]:
     if not text or not text.strip():
         return {}
 
-    nlp = _get_spacy_nlp(_resolve_model_name())
+    nlp = _get_spacy_nlp(_resolve_model_name() or _DEFAULT_MODEL)
     if nlp is None:
         return {}
 
@@ -169,11 +172,9 @@ def extract_spacy_entities(text: str) -> dict[str, int]:
 
     counts: dict[str, int] = {}
     for ent in doc.ents:
-        label = getattr(ent, "label_", None)
-        if label not in _KEEP_LABELS:
+        if ent.label_ not in _KEEP_LABELS:
             continue
-        raw_text = getattr(ent, "text", "") or ""
-        name = raw_text.strip()
+        name = ent.text.strip()
         if not name:
             continue
         counts[name] = counts.get(name, 0) + 1

@@ -39,10 +39,12 @@ def _make_fake_nlp(ents: list[SimpleNamespace]) -> MagicMock:
 
 @pytest.fixture(autouse=True)
 def _clear_caches():
-    """Drop the lru_cache between tests so env-var overrides take effect."""
+    """Drop the lru_caches between tests so env-var + model overrides take effect."""
     entity_spacy._get_spacy_nlp.cache_clear()
+    entity_spacy._resolve_model_name.cache_clear()
     yield
     entity_spacy._get_spacy_nlp.cache_clear()
+    entity_spacy._resolve_model_name.cache_clear()
 
 
 # ── _spacy_available ────────────────────────────────────────────────────
@@ -168,29 +170,51 @@ def test_extract_drops_empty_or_whitespace_only_entities():
 # ── MEMPALACE_SPACY_MODEL env var ───────────────────────────────────────
 
 
-def test_default_model_is_en_core_web_sm(monkeypatch):
-    """When MEMPALACE_SPACY_MODEL is unset, the loader must request the
-    small English model."""
+def test_unset_env_var_returns_empty_string(monkeypatch):
+    """When MEMPALACE_SPACY_MODEL is unset, the resolver returns an empty
+    string. The default model name is layered on at the call site, NOT
+    silently inside the resolver, per project convention on env-var
+    parsing (the caller can distinguish "user did not configure" from
+    "user explicitly set the default")."""
     monkeypatch.delenv("MEMPALACE_SPACY_MODEL", raising=False)
-    assert entity_spacy._resolve_model_name() == "en_core_web_sm"
+    assert entity_spacy._resolve_model_name() == ""
 
 
 def test_env_var_overrides_default_model(monkeypatch):
-    """MEMPALACE_SPACY_MODEL must replace the default."""
+    """MEMPALACE_SPACY_MODEL must be returned verbatim (after strip)."""
     monkeypatch.setenv("MEMPALACE_SPACY_MODEL", "en_core_web_md")
     assert entity_spacy._resolve_model_name() == "en_core_web_md"
 
 
 def test_env_var_whitespace_is_stripped(monkeypatch):
-    """Surrounding whitespace in env var must not break the model name."""
+    """Surrounding whitespace in env var must not pass through to the
+    model name."""
     monkeypatch.setenv("MEMPALACE_SPACY_MODEL", "  en_core_web_lg  \n")
     assert entity_spacy._resolve_model_name() == "en_core_web_lg"
 
 
-def test_empty_env_var_falls_back_to_default(monkeypatch):
-    """Empty MEMPALACE_SPACY_MODEL must not produce an empty model name."""
+def test_empty_env_var_returns_empty_string(monkeypatch):
+    """An explicitly empty MEMPALACE_SPACY_MODEL returns "" — same as
+    unset. The caller layers the default via ``... or _DEFAULT_MODEL``."""
     monkeypatch.setenv("MEMPALACE_SPACY_MODEL", "")
-    assert entity_spacy._resolve_model_name() == "en_core_web_sm"
+    assert entity_spacy._resolve_model_name() == ""
+
+
+def test_caller_layers_default_when_resolver_returns_empty(monkeypatch):
+    """When _resolve_model_name returns "", extract_spacy_entities must
+    layer on _DEFAULT_MODEL at the call site, not crash with spacy.load("")."""
+    monkeypatch.delenv("MEMPALACE_SPACY_MODEL", raising=False)
+    fake_nlp = _make_fake_nlp([_make_fake_ent("Aya", "PERSON")])
+    captured_model = {}
+
+    def fake_get(model_name: str):
+        captured_model["name"] = model_name
+        return fake_nlp
+
+    with patch.object(entity_spacy, "_get_spacy_nlp", side_effect=fake_get):
+        entity_spacy.extract_spacy_entities("Aya was here.")
+
+    assert captured_model["name"] == entity_spacy._DEFAULT_MODEL
 
 
 # ── _get_spacy_nlp cache + lazy download ────────────────────────────────
