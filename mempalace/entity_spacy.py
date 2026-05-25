@@ -28,6 +28,7 @@ from __future__ import annotations
 import functools
 import logging
 import os
+from typing import Any
 
 logger = logging.getLogger("mempalace.entity_spacy")
 
@@ -87,7 +88,7 @@ def _resolve_model_name() -> str:
 
 
 @functools.lru_cache(maxsize=4)
-def _get_spacy_nlp(model_name: str):
+def _get_spacy_nlp(model_name: str) -> Any | None:
     """Load (and cache) a spaCy nlp pipeline by model name.
 
     Returns the loaded pipeline object on success, or ``None`` on any
@@ -177,7 +178,8 @@ def extract_spacy_entities(text: str) -> dict[str, int]:
         return {}
 
     try:
-        doc = nlp(text)
+        with nlp.select_pipes(enable="ner"):
+            doc = nlp(text)
     except Exception as exc:
         logger.warning(
             "spaCy processing raised %s on a %d-char input; skipping",
