@@ -340,7 +340,12 @@ def extract_candidates(text: str, languages=("en",)) -> dict:
     # Regex-detected names retain their regex count when both pipelines
     # agree, so existing scoring/classification downstream is unaffected.
     for name, spacy_count in extract_spacy_entities(text).items():
-        if name not in result:
+        if (
+            name not in result
+            and name.lower() not in stopwords
+            and name.lower() not in coca_filter
+            and len(name) > 2
+        ):
             result[name] = spacy_count
 
     return result
