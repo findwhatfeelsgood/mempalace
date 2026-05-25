@@ -40,6 +40,7 @@ from pathlib import Path
 from collections import defaultdict
 
 from mempalace.i18n import get_entity_patterns
+from mempalace.entity_spacy import extract_spacy_entities
 
 
 # ==================== COCA CONTENT-WORD FILTER (Tier 2 linguistics cleanup) ====================
@@ -328,7 +329,21 @@ def extract_candidates(text: str, languages=("en",)) -> dict:
                 continue
             counts[phrase] += 1
 
-    return {name: count for name, count in counts.items() if count >= 3}
+    result = {name: count for name, count in counts.items() if count >= 3}
+
+    # Tier 4 linguistics cleanup — augment with spaCy NER when the
+    # ``mempalace[nlp]`` extra is installed. spaCy uses statistical NER
+    # (high-precision proper-noun detection), so its hits bypass the
+    # frequency threshold that the regex pipeline needs to filter
+    # false positives. If spaCy is not installed,
+    # ``extract_spacy_entities`` returns ``{}`` and behavior is unchanged.
+    # Regex-detected names retain their regex count when both pipelines
+    # agree, so existing scoring/classification downstream is unaffected.
+    for name, spacy_count in extract_spacy_entities(text).items():
+        if name not in result:
+            result[name] = spacy_count
+
+    return result
 
 
 # ==================== SIGNAL SCORING ====================
