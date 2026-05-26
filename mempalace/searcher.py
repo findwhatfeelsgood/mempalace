@@ -166,6 +166,67 @@ def _hybrid_rank(
     return results
 
 
+def _rollup_by_stack(hits: list) -> list:
+    """Collapse hits that share a ``stack_id`` to one result per stack —
+    the LATEST layer (highest ``filed_at``). Surfaces the chosen layer
+    alongside a ``layer_count`` so callers can render an indicator like
+    ``[layer 3 of 4]``.
+
+    Layers within a stack are versions of the same logical chunk across
+    re-mines (per #1593's additive model). Default search should show one
+    result per logical chunk, not one per physical row — otherwise a
+    re-mined file produces N duplicate-looking results when there's
+    really one logical drawer with version history beneath it.
+
+    Hits without a ``stack_id`` (legacy drawers written before the field
+    existed) pass through unchanged — backward compat preserved.
+
+    Mutates each surfaced hit's ``metadata`` to add ``layer_count``.
+    Returns a new list in the same relative order as the input.
+    """
+    if not hits:
+        return hits
+
+    seen_stacks: dict = {}  # stack_id → (best_hit, count)
+    output: list = []
+    output_positions: dict = {}  # stack_id → index in output
+
+    for hit in hits:
+        meta = hit.get("metadata") or {}
+        stack_id = meta.get("stack_id")
+        if not stack_id:
+            # Legacy drawer (no stack_id) — pass through.
+            output.append(hit)
+            continue
+
+        if stack_id not in seen_stacks:
+            seen_stacks[stack_id] = (hit, 1)
+            output_positions[stack_id] = len(output)
+            output.append(hit)
+        else:
+            best_hit, count = seen_stacks[stack_id]
+            best_filed = (best_hit.get("metadata") or {}).get("filed_at", "")
+            this_filed = meta.get("filed_at", "")
+            # Keep the latest layer (highest filed_at). Ties resolved by
+            # whichever was seen first (preserves rank order).
+            if this_filed > best_filed:
+                seen_stacks[stack_id] = (hit, count + 1)
+                output[output_positions[stack_id]] = hit
+            else:
+                seen_stacks[stack_id] = (best_hit, count + 1)
+
+    # Stamp layer_count onto each surfaced hit so callers can render it.
+    for hit in output:
+        meta = hit.get("metadata") or {}
+        stack_id = meta.get("stack_id")
+        if stack_id and stack_id in seen_stacks:
+            _, count = seen_stacks[stack_id]
+            meta["layer_count"] = count
+            hit["metadata"] = meta
+
+    return output
+
+
 def build_where_filter(wing: str = None, room: str = None) -> dict:
     """Build ChromaDB where filter for wing/room filtering."""
     if wing and room:
@@ -214,15 +275,23 @@ def _expand_with_neighbors(drawers_col, matched_doc: str, matched_meta: dict, ra
     if not src or not isinstance(chunk_idx, int):
         return {"text": matched_doc, "drawer_index": chunk_idx, "total_drawers": None}
 
-    target_indexes = [chunk_idx + offset for offset in range(-radius, radius + 1)]
+    # Scope neighbor expansion by ``parent_drawer_id`` when the matched
+    # drawer carries one. Without this scope, two unrelated drawer groups
+    # that share a source_file (e.g. two MCP pastes with no source_file,
+    # or two re-mines of the same file) would interleave their chunks in
+    # the expanded text — exactly the bug #1580 surfaced. Legacy drawers
+    # written before the parent_drawer_id field existed fall back to the
+    # source_file + chunk_index scope, preserving prior behavior.
+    parent_id = matched_meta.get("parent_drawer_id")
+    where_filters: list[dict] = [
+        {"source_file": src},
+        {"chunk_index": {"$in": [chunk_idx + offset for offset in range(-radius, radius + 1)]}},
+    ]
+    if parent_id:
+        where_filters.append({"parent_drawer_id": parent_id})
     try:
         neighbors = drawers_col.get(
-            where={
-                "$and": [
-                    {"source_file": src},
-                    {"chunk_index": {"$in": target_indexes}},
-                ]
-            },
+            where={"$and": where_filters},
             include=["documents", "metadatas"],
         )
     except Exception:
@@ -240,10 +309,17 @@ def _expand_with_neighbors(drawers_col, matched_doc: str, matched_meta: dict, ra
     else:
         combined_text = "\n\n".join(doc for _, doc in indexed_docs)
 
-    # Cheap total_drawers lookup: metadata-only scan of the source file.
+    # Cheap total_drawers lookup: metadata-only scan, scoped by
+    # parent_drawer_id when present so the count reflects "chunks in THIS
+    # mining pass" rather than over-reporting across multiple re-mines of
+    # the same source_file. Legacy drawers without parent_drawer_id fall
+    # back to the source_file scope.
     total_drawers = None
     try:
-        all_meta = drawers_col.get(where={"source_file": src}, include=["metadatas"])
+        if parent_id:
+            all_meta = drawers_col.get(where={"parent_drawer_id": parent_id}, include=["metadatas"])
+        else:
+            all_meta = drawers_col.get(where={"source_file": src}, include=["metadatas"])
         total_drawers = len(all_meta.ids) if all_meta.ids else None
     except Exception:
         logger.debug("total_drawers lookup failed for %s", src, exc_info=True)
@@ -365,6 +441,11 @@ def search(query: str, palace_path: str, wing: str = None, room: str = None, n_r
         for doc, meta, dist in zip(docs, metas, dists)
     ]
     hits = _hybrid_rank(hits, query)
+    # Collapse multiple layers of the same logical drawer to a single
+    # result (the latest layer), tagged with layer_count so the renderer
+    # can surface an indicator like ``[layer 3 of 4]``. Legacy drawers
+    # without stack_id pass through unchanged.
+    hits = _rollup_by_stack(hits)
 
     print(f"\n{'=' * 60}")
     print(f'  Results for: "{query}"')
@@ -381,8 +462,10 @@ def search(query: str, palace_path: str, wing: str = None, room: str = None, n_r
         source = Path(meta.get("source_file", "?")).name
         wing_name = meta.get("wing", "?")
         room_name = meta.get("room", "?")
+        layer_count = meta.get("layer_count", 1)
 
-        print(f"  [{i}] {wing_name} / {room_name}")
+        layer_indicator = f"  [{layer_count} layers]" if layer_count > 1 else ""
+        print(f"  [{i}] {wing_name} / {room_name}{layer_indicator}")
         print(f"      Source: {source}")
         print(f"      Match:  cosine={vec_sim}  bm25={bm25}")
         print()
