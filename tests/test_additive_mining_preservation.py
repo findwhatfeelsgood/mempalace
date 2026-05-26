@@ -582,56 +582,90 @@ class TestNeighborExpansionScopedByParentDrawerId:
     """#1580 — searcher._expand_with_neighbors must not stitch chunks
     across unrelated drawers that share an empty source_file."""
 
-    def test_neighbors_do_not_cross_parent_drawer_id(self):
-        """Two unrelated oversized MCP pastes (no source_file) must not
-        have their chunks interleave during neighbor expansion.
+    def test_neighbors_do_not_cross_parent_drawer_id(self, tmp_path):
+        """Two unrelated drawer-groups that share a non-empty source_file
+        must NOT interleave their chunks during neighbor expansion.
 
-        EXPECTED: expanding neighbors of chunk 0 from drawer A never
-                  returns content that was originally part of drawer B.
-        FAIL SIGNAL: drawer B's content appears in the neighbor-expansion
-                     result for drawer A's chunk 0.
+        EXPECTED: expanding neighbors of chunk 0 from group A returns
+                  content from group A only. Group B's distinctive marker
+                  is NEVER in the expanded text.
+        FAIL SIGNAL: group B's content appears in the expansion result —
+                     parent_drawer_id scope is not being applied.
 
-        Reproducer is Igor's exact code from issue #1580.
+        Uses non-empty source_file with two parent_drawer_ids deliberately
+        sharing it. This is the case where the ``if not src`` early-return
+        guard in _expand_with_neighbors does NOT short-circuit — so the
+        $and-filter logic actually runs. (The earlier version of this test
+        was a false-positive: it used empty source_file, which short-
+        circuits before reaching the filter, so the test passed regardless
+        of whether the filter was correct. Gemini caught the underlying
+        ChromaDB $and-limit-2 bug in the filter when the real path was
+        exercised; this test now pins the failure space.)
         """
-        pytest.importorskip("mempalace.mcp_server")
-        from mempalace.mcp_server import tool_add_drawer
-        from mempalace.searcher import _expand_with_neighbors
-        from mempalace.config import MempalaceConfig
+        palace = tmp_path / "palace"
+        client = chromadb.PersistentClient(path=str(palace))
+        col = client.get_or_create_collection("mempalace_drawers")
 
-        wing = "repro_1580"
-        room = "paste"
-
-        # Two unrelated oversized pastes, no source_file — both chunk into
-        # multiple drawers that share the same empty source_file key.
-        marker_a = "DRAWER_A_UNIQUE_MARKER"
-        marker_b = "DRAWER_B_UNIQUE_MARKER"
-        result_a = tool_add_drawer(wing=wing, room=room, content=marker_a + " " + "AAAA " * 250)
-        tool_add_drawer(wing=wing, room=room, content=marker_b + " " + "BBBB " * 250)
-
-        # Open the MCP's default palace (HOME redirected to tmp via conftest).
-        palace_path = MempalaceConfig().palace_path
-        client = chromadb.PersistentClient(path=palace_path)
-        col = client.get_collection("mempalace_drawers")
-
-        # Fetch chunk 0 of drawer A.
-        a_chunks = col.get(
-            where={"parent_drawer_id": result_a["drawer_id"]},
-            include=["documents", "metadatas"],
+        # Two distinct mining passes of the same source_file produce two
+        # parent_drawer_ids that share source_file — the exact shape #1580
+        # protects against.
+        source_file = str(tmp_path / "shared.md")
+        marker_a = "DRAWER_A_UNIQUE_MARKER_1580"
+        marker_b = "DRAWER_B_UNIQUE_MARKER_1580"
+        col.add(
+            ids=["a_chunk_0", "a_chunk_1"],
+            documents=[f"chunk 0 of group A — {marker_a}", "chunk 1 of group A"],
+            metadatas=[
+                {
+                    "source_file": source_file,
+                    "chunk_index": 0,
+                    "parent_drawer_id": "parent_GROUP_A",
+                    "filed_at": "2026-01-01T00:00:00",
+                },
+                {
+                    "source_file": source_file,
+                    "chunk_index": 1,
+                    "parent_drawer_id": "parent_GROUP_A",
+                    "filed_at": "2026-01-01T00:00:00",
+                },
+            ],
         )
-        a_chunk_0_doc = None
-        a_chunk_0_meta = None
-        for doc, meta in zip(a_chunks["documents"], a_chunks["metadatas"]):
-            if meta.get("chunk_index") == 0:
-                a_chunk_0_doc = doc
-                a_chunk_0_meta = meta
-                break
+        col.add(
+            ids=["b_chunk_0", "b_chunk_1"],
+            documents=[f"chunk 0 of group B — {marker_b}", "chunk 1 of group B"],
+            metadatas=[
+                {
+                    "source_file": source_file,
+                    "chunk_index": 0,
+                    "parent_drawer_id": "parent_GROUP_B",
+                    "filed_at": "2026-02-01T00:00:00",
+                },
+                {
+                    "source_file": source_file,
+                    "chunk_index": 1,
+                    "parent_drawer_id": "parent_GROUP_B",
+                    "filed_at": "2026-02-01T00:00:00",
+                },
+            ],
+        )
 
-        assert a_chunk_0_doc is not None, "Could not locate chunk 0 of drawer A"
+        # Expand neighbors of group A's chunk 0.
+        from mempalace.searcher import _expand_with_neighbors
 
+        a_chunk_0_doc = f"chunk 0 of group A — {marker_a}"
+        a_chunk_0_meta = {
+            "source_file": source_file,
+            "chunk_index": 0,
+            "parent_drawer_id": "parent_GROUP_A",
+            "filed_at": "2026-01-01T00:00:00",
+        }
         expanded = _expand_with_neighbors(col, a_chunk_0_doc, a_chunk_0_meta)
         expanded_text = expanded.get("text", "")
 
+        assert marker_a in expanded_text, (
+            "Group A's own content is missing from its own neighbor expansion"
+        )
         assert marker_b not in expanded_text, (
-            "Neighbor expansion of drawer A's chunk 0 returned drawer B's content — "
-            "violates #1580; expansion must be scoped by parent_drawer_id"
+            "Neighbor expansion of group A's chunk 0 returned group B's content — "
+            "violates #1580; parent_drawer_id scope is not being applied"
         )

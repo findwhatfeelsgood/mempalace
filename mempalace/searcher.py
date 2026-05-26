@@ -285,24 +285,48 @@ def _expand_with_neighbors(drawers_col, matched_doc: str, matched_meta: dict, ra
     # the expanded text — exactly the bug #1580 surfaced. Legacy drawers
     # written before the parent_drawer_id field existed fall back to the
     # source_file + chunk_index scope, preserving prior behavior.
+    # ChromaDB's ``$and`` operator only accepts EXACTLY two dictionaries —
+    # passing a list of three raises a validation error that the except
+    # block below silently swallows, falling back to "just the matched
+    # drawer." So we branch the filter shape based on whether
+    # ``parent_drawer_id`` is present. When it is, querying by
+    # parent_drawer_id alone already implicitly scopes to one source file
+    # (parent_drawer_id is constructed from wing + room + source_file +
+    # filed_at in the miners), so we drop the source_file clause to stay
+    # within the two-dict limit while preserving the intended scope.
+    target_indexes = [chunk_idx + offset for offset in range(-radius, radius + 1)]
     parent_id = matched_meta.get("parent_drawer_id")
-    where_filters: list[dict] = [
-        {"source_file": src},
-        {"chunk_index": {"$in": [chunk_idx + offset for offset in range(-radius, radius + 1)]}},
-    ]
     if parent_id:
-        where_filters.append({"parent_drawer_id": parent_id})
+        where_filter = {
+            "$and": [
+                {"parent_drawer_id": parent_id},
+                {"chunk_index": {"$in": target_indexes}},
+            ]
+        }
+    else:
+        where_filter = {
+            "$and": [
+                {"source_file": src},
+                {"chunk_index": {"$in": target_indexes}},
+            ]
+        }
     try:
         neighbors = drawers_col.get(
-            where={"$and": where_filters},
+            where=where_filter,
             include=["documents", "metadatas"],
         )
     except Exception:
         return {"text": matched_doc, "drawer_index": chunk_idx, "total_drawers": None}
 
+    # ChromaDB returns a dict from ``get(...)``, not a typed object — use
+    # subscript access (``neighbors["documents"]``) rather than attribute
+    # access. The earlier attribute-access pattern raised AttributeError
+    # in every code path, but the broad except above silently caught it
+    # and returned the fallback, masking the bug for as long as the
+    # outer $and filter also failed.
     indexed_docs = []
-    for doc, meta in zip(neighbors.documents, neighbors.metadatas):
-        ci = meta.get("chunk_index")
+    for doc, meta in zip(neighbors["documents"], neighbors["metadatas"]):
+        ci = (meta or {}).get("chunk_index")
         if isinstance(ci, int):
             indexed_docs.append((ci, doc))
     indexed_docs.sort(key=lambda pair: pair[0])
@@ -323,7 +347,8 @@ def _expand_with_neighbors(drawers_col, matched_doc: str, matched_meta: dict, ra
             all_meta = drawers_col.get(where={"parent_drawer_id": parent_id}, include=["metadatas"])
         else:
             all_meta = drawers_col.get(where={"source_file": src}, include=["metadatas"])
-        total_drawers = len(all_meta.ids) if all_meta.ids else None
+        ids = all_meta["ids"] if isinstance(all_meta, dict) else getattr(all_meta, "ids", None)
+        total_drawers = len(ids) if ids else None
     except Exception:
         logger.debug("total_drawers lookup failed for %s", src, exc_info=True)
 
