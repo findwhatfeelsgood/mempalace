@@ -166,70 +166,6 @@ def _hybrid_rank(
     return results
 
 
-def _rollup_by_stack(hits: list) -> list:
-    """Collapse hits that share a ``stack_id`` to one result per stack —
-    the LATEST layer (highest ``filed_at``). Surfaces the chosen layer
-    alongside a ``layer_count`` so callers can render an indicator like
-    ``[layer 3 of 4]``.
-
-    Layers within a stack are versions of the same logical chunk across
-    re-mines (per #1593's additive model). Default search should show one
-    result per logical chunk, not one per physical row — otherwise a
-    re-mined file produces N duplicate-looking results when there's
-    really one logical drawer with version history beneath it.
-
-    Hits without a ``stack_id`` (legacy drawers written before the field
-    existed) pass through unchanged — backward compat preserved.
-
-    Mutates each surfaced hit's ``metadata`` to add ``layer_count``.
-    Returns a new list in the same relative order as the input.
-    """
-    if not hits:
-        return hits
-
-    seen_stacks: dict = {}  # stack_id → (best_hit, count)
-    output: list = []
-    output_positions: dict = {}  # stack_id → index in output
-
-    for hit in hits:
-        meta = hit.get("metadata") or {}
-        stack_id = meta.get("stack_id")
-        if not stack_id:
-            # Legacy drawer (no stack_id) — pass through.
-            output.append(hit)
-            continue
-
-        if stack_id not in seen_stacks:
-            seen_stacks[stack_id] = (hit, 1)
-            output_positions[stack_id] = len(output)
-            output.append(hit)
-        else:
-            best_hit, count = seen_stacks[stack_id]
-            # ``or ""`` guards against ``filed_at: None`` in metadata (which
-            # would crash ``this_filed > best_filed`` with TypeError). Returns
-            # "" for both missing AND None.
-            best_filed = (best_hit.get("metadata") or {}).get("filed_at") or ""
-            this_filed = meta.get("filed_at") or ""
-            # Keep the latest layer (highest filed_at). Ties resolved by
-            # whichever was seen first (preserves rank order).
-            if this_filed > best_filed:
-                seen_stacks[stack_id] = (hit, count + 1)
-                output[output_positions[stack_id]] = hit
-            else:
-                seen_stacks[stack_id] = (best_hit, count + 1)
-
-    # Stamp layer_count onto each surfaced hit so callers can render it.
-    for hit in output:
-        meta = hit.get("metadata") or {}
-        stack_id = meta.get("stack_id")
-        if stack_id and stack_id in seen_stacks:
-            _, count = seen_stacks[stack_id]
-            meta["layer_count"] = count
-            hit["metadata"] = meta
-
-    return output
-
-
 def build_where_filter(wing: str = None, room: str = None) -> dict:
     """Build ChromaDB where filter for wing/room filtering."""
     if wing and room:
@@ -255,6 +191,31 @@ def _extract_drawer_ids_from_closet(closet_doc: str) -> list:
     return list(seen.keys())
 
 
+def _scoped_source_filter(source_file: str, parent_drawer_id=None) -> dict:
+    """Build a Chroma ``where`` clause that scopes a query to ``source_file``,
+    additionally constrained by ``parent_drawer_id`` when one is supplied.
+
+    Two unrelated oversized ``tool_add_drawer`` writes (chunked path from
+    #1539) can pass the same ``source_file`` (e.g. two pastes tagged
+    ``"chat.log"``); each call stores its own ``parent_drawer_id`` group
+    of chunks but the bare ``source_file`` filter pulls chunks from both
+    groups as if they were siblings (#1580). When the matched chunk
+    carries a ``parent_drawer_id`` the filter narrows to that logical
+    group. Otherwise (pre-#1539 drawers, single-chunk writes, and
+    ``diary_ingest`` drawers grouped by real file path) the original
+    file-global shape is preserved. Mirrors the conditional-``$and``
+    precedent in ``build_where_filter``.
+    """
+    if parent_drawer_id:
+        return {
+            "$and": [
+                {"source_file": source_file},
+                {"parent_drawer_id": parent_drawer_id},
+            ]
+        }
+    return {"source_file": source_file}
+
+
 def _expand_with_neighbors(drawers_col, matched_doc: str, matched_meta: dict, radius: int = 1):
     """Expand a matched drawer with its ±radius sibling chunks in the same source file.
 
@@ -278,55 +239,28 @@ def _expand_with_neighbors(drawers_col, matched_doc: str, matched_meta: dict, ra
     if not src or not isinstance(chunk_idx, int):
         return {"text": matched_doc, "drawer_index": chunk_idx, "total_drawers": None}
 
-    # Scope neighbor expansion by ``parent_drawer_id`` when the matched
-    # drawer carries one. Without this scope, two unrelated drawer groups
-    # that share a source_file (e.g. two MCP pastes with no source_file,
-    # or two re-mines of the same file) would interleave their chunks in
-    # the expanded text — exactly the bug #1580 surfaced. Legacy drawers
-    # written before the parent_drawer_id field existed fall back to the
-    # source_file + chunk_index scope, preserving prior behavior.
-    # ChromaDB's ``$and`` operator only accepts EXACTLY two dictionaries —
-    # passing a list of three raises a validation error that the except
-    # block below silently swallows, falling back to "just the matched
-    # drawer." So we branch the filter shape based on whether
-    # ``parent_drawer_id`` is present. When it is, querying by
-    # parent_drawer_id alone already implicitly scopes to one source file
-    # (parent_drawer_id is constructed from wing + room + source_file +
-    # filed_at in the miners), so we drop the source_file clause to stay
-    # within the two-dict limit while preserving the intended scope.
-    target_indexes = [chunk_idx + offset for offset in range(-radius, radius + 1)]
+    # Narrow by ``parent_drawer_id`` when present so chunks from unrelated
+    # logical drawers sharing ``source_file`` do not stitch (#1580). See
+    # ``_scoped_source_filter`` for the contract.
     parent_id = matched_meta.get("parent_drawer_id")
+    target_indexes = [chunk_idx + offset for offset in range(-radius, radius + 1)]
+    neighbor_clauses = [
+        {"source_file": src},
+        {"chunk_index": {"$in": target_indexes}},
+    ]
     if parent_id:
-        where_filter = {
-            "$and": [
-                {"parent_drawer_id": parent_id},
-                {"chunk_index": {"$in": target_indexes}},
-            ]
-        }
-    else:
-        where_filter = {
-            "$and": [
-                {"source_file": src},
-                {"chunk_index": {"$in": target_indexes}},
-            ]
-        }
+        neighbor_clauses.append({"parent_drawer_id": parent_id})
     try:
         neighbors = drawers_col.get(
-            where=where_filter,
+            where={"$and": neighbor_clauses},
             include=["documents", "metadatas"],
         )
     except Exception:
         return {"text": matched_doc, "drawer_index": chunk_idx, "total_drawers": None}
 
-    # ChromaDB returns a dict from ``get(...)``, not a typed object — use
-    # subscript access (``neighbors["documents"]``) rather than attribute
-    # access. The earlier attribute-access pattern raised AttributeError
-    # in every code path, but the broad except above silently caught it
-    # and returned the fallback, masking the bug for as long as the
-    # outer $and filter also failed.
     indexed_docs = []
-    for doc, meta in zip(neighbors["documents"], neighbors["metadatas"]):
-        ci = (meta or {}).get("chunk_index")
+    for doc, meta in zip(neighbors.documents, neighbors.metadatas):
+        ci = meta.get("chunk_index")
         if isinstance(ci, int):
             indexed_docs.append((ci, doc))
     indexed_docs.sort(key=lambda pair: pair[0])
@@ -336,19 +270,17 @@ def _expand_with_neighbors(drawers_col, matched_doc: str, matched_meta: dict, ra
     else:
         combined_text = "\n\n".join(doc for _, doc in indexed_docs)
 
-    # Cheap total_drawers lookup: metadata-only scan, scoped by
-    # parent_drawer_id when present so the count reflects "chunks in THIS
-    # mining pass" rather than over-reporting across multiple re-mines of
-    # the same source_file. Legacy drawers without parent_drawer_id fall
-    # back to the source_file scope.
+    # Cheap total_drawers lookup. When ``parent_drawer_id`` is present the
+    # count is scoped to that group so the returned number matches the
+    # text the caller gets back. Without a parent id, the legacy
+    # file-global count is preserved.
     total_drawers = None
     try:
-        if parent_id:
-            all_meta = drawers_col.get(where={"parent_drawer_id": parent_id}, include=["metadatas"])
-        else:
-            all_meta = drawers_col.get(where={"source_file": src}, include=["metadatas"])
-        ids = all_meta["ids"] if isinstance(all_meta, dict) else getattr(all_meta, "ids", None)
-        total_drawers = len(ids) if ids else None
+        all_meta = drawers_col.get(
+            where=_scoped_source_filter(src, parent_id),
+            include=["metadatas"],
+        )
+        total_drawers = len(all_meta.ids) if all_meta.ids else None
     except Exception:
         logger.debug("total_drawers lookup failed for %s", src, exc_info=True)
 
@@ -469,11 +401,6 @@ def search(query: str, palace_path: str, wing: str = None, room: str = None, n_r
         for doc, meta, dist in zip(docs, metas, dists)
     ]
     hits = _hybrid_rank(hits, query)
-    # Collapse multiple layers of the same logical drawer to a single
-    # result (the latest layer), tagged with layer_count so the renderer
-    # can surface an indicator like ``[layer 3 of 4]``. Legacy drawers
-    # without stack_id pass through unchanged.
-    hits = _rollup_by_stack(hits)
 
     print(f"\n{'=' * 60}")
     print(f'  Results for: "{query}"')
@@ -490,10 +417,8 @@ def search(query: str, palace_path: str, wing: str = None, room: str = None, n_r
         source = Path(meta.get("source_file", "?")).name
         wing_name = meta.get("wing", "?")
         room_name = meta.get("room", "?")
-        layer_count = meta.get("layer_count", 1)
 
-        layer_indicator = f"  [{layer_count} layers]" if layer_count > 1 else ""
-        print(f"  [{i}] {wing_name} / {room_name}{layer_indicator}")
+        print(f"  [{i}] {wing_name} / {room_name}")
         print(f"      Source: {source}")
         print(f"      Match:  cosine={vec_sim}  bm25={bm25}")
         print()
@@ -1030,6 +955,7 @@ def search_memories(
             "_sort_key": effective_dist,
             "_source_file_full": source,
             "_chunk_index": meta.get("chunk_index"),
+            "_parent_drawer_id": meta.get("parent_drawer_id"),
         }
         if closet_preview:
             entry["closet_preview"] = closet_preview
@@ -1050,9 +976,11 @@ def search_memories(
         full_source = h.get("_source_file_full") or ""
         if not full_source:
             continue
+        # Narrow by ``parent_drawer_id`` when present so unrelated
+        # chunked drawers sharing ``source_file`` do not stitch (#1580).
         try:
             source_drawers = drawers_col.get(
-                where={"source_file": full_source},
+                where=_scoped_source_filter(full_source, h.get("_parent_drawer_id")),
                 include=["documents", "metadatas"],
             )
         except Exception:
@@ -1121,6 +1049,7 @@ def search_memories(
         h.pop("_sort_key", None)
         h.pop("_source_file_full", None)
         h.pop("_chunk_index", None)
+        h.pop("_parent_drawer_id", None)
 
     return {
         "query": query,

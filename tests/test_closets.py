@@ -1557,3 +1557,156 @@ class TestDrawerGrepExpansion:
         # Enriched text must include the grep-best chunk plus one neighbor
         # on each side (chunk boundary may clip).
         assert "chunk_" in top["text"]
+
+    def test_expand_isolates_chunks_by_parent_drawer_id_when_source_file_shared(self, palace_path):
+        """Regression for #1580 — first code path: ``_expand_with_neighbors``.
+        Two unrelated logical drawer groups sharing the same
+        ``source_file`` (e.g. two pastes labelled ``source_file="chat.log"``)
+        must not have their chunks stitched together as if they were
+        sequential neighbors. Scoping by ``parent_drawer_id`` when present
+        keeps each logical group isolated. Adapted from mvalentsev's PR #1582.
+        """
+        col = get_collection(palace_path)
+        source = "shared.log"
+        col.upsert(
+            ids=["drawer_A_chunk_000000", "drawer_A_chunk_000001"],
+            documents=["alpha-A-chunk-0 content", "alpha-A-chunk-1 content"],
+            metadatas=[
+                {
+                    "wing": "w",
+                    "room": "r",
+                    "source_file": source,
+                    "chunk_index": 0,
+                    "parent_drawer_id": "drawer_A",
+                    "filed_at": "2026-04-13T00:00:00",
+                },
+                {
+                    "wing": "w",
+                    "room": "r",
+                    "source_file": source,
+                    "chunk_index": 1,
+                    "parent_drawer_id": "drawer_A",
+                    "filed_at": "2026-04-13T00:00:00",
+                },
+            ],
+        )
+        col.upsert(
+            ids=["drawer_B_chunk_000000", "drawer_B_chunk_000001"],
+            documents=["bravo-B-chunk-0 content", "bravo-B-chunk-1 content"],
+            metadatas=[
+                {
+                    "wing": "w",
+                    "room": "r",
+                    "source_file": source,
+                    "chunk_index": 0,
+                    "parent_drawer_id": "drawer_B",
+                    "filed_at": "2026-04-13T00:00:00",
+                },
+                {
+                    "wing": "w",
+                    "room": "r",
+                    "source_file": source,
+                    "chunk_index": 1,
+                    "parent_drawer_id": "drawer_B",
+                    "filed_at": "2026-04-13T00:00:00",
+                },
+            ],
+        )
+        matched_doc = "alpha-A-chunk-0 content"
+        matched_meta = {
+            "source_file": source,
+            "chunk_index": 0,
+            "parent_drawer_id": "drawer_A",
+        }
+        out = _expand_with_neighbors(col, matched_doc, matched_meta, radius=1)
+        text = out["text"]
+        assert "alpha-A-chunk-0" in text
+        assert "alpha-A-chunk-1" in text
+        assert "bravo-B-chunk-0" not in text
+        assert "bravo-B-chunk-1" not in text
+        assert out["total_drawers"] == 2
+
+    def test_search_memories_enrichment_isolates_by_parent_drawer_id(self, palace_path):
+        """Regression for #1580 — SECOND code path: the drawer-grep
+        enrichment block in ``search_memories`` (the
+        ``# Drawer-grep enrichment`` section at ``searcher.py:1054``).
+        Distinct from ``_expand_with_neighbors``. Flagged by fatkobra
+        after gemini cleared the original site.
+
+        Setup: two unrelated logical drawer groups sharing
+        ``source_file="shared.log"``, plus a closet pointing at group A's
+        chunk so the hybrid path promotes the source to
+        ``matched_via == "drawer+closet"`` and triggers the enrichment
+        block. After the fix, the enriched text MUST contain only group
+        A's chunks; group B's content MUST NOT leak in.
+        """
+        col = get_collection(palace_path)
+        source = "shared.log"
+        col.upsert(
+            ids=["drawer_A_chunk_000000", "drawer_A_chunk_000001"],
+            documents=[
+                "ALPHA_GROUP_A chunk 0 — discusses the JWT auth pattern in detail",
+                "ALPHA_GROUP_A chunk 1 — follows up on the JWT discussion",
+            ],
+            metadatas=[
+                {
+                    "wing": "w",
+                    "room": "r",
+                    "source_file": source,
+                    "chunk_index": 0,
+                    "parent_drawer_id": "drawer_A",
+                    "filed_at": "2026-04-13T00:00:00",
+                },
+                {
+                    "wing": "w",
+                    "room": "r",
+                    "source_file": source,
+                    "chunk_index": 1,
+                    "parent_drawer_id": "drawer_A",
+                    "filed_at": "2026-04-13T00:00:00",
+                },
+            ],
+        )
+        col.upsert(
+            ids=["drawer_B_chunk_000000", "drawer_B_chunk_000001"],
+            documents=[
+                "BRAVO_GROUP_B chunk 0 — unrelated content about postgres tuning",
+                "BRAVO_GROUP_B chunk 1 — more on postgres",
+            ],
+            metadatas=[
+                {
+                    "wing": "w",
+                    "room": "r",
+                    "source_file": source,
+                    "chunk_index": 0,
+                    "parent_drawer_id": "drawer_B",
+                    "filed_at": "2026-04-13T00:00:00",
+                },
+                {
+                    "wing": "w",
+                    "room": "r",
+                    "source_file": source,
+                    "chunk_index": 1,
+                    "parent_drawer_id": "drawer_B",
+                    "filed_at": "2026-04-13T00:00:00",
+                },
+            ],
+        )
+        closets = get_closets_collection(palace_path)
+        closets.upsert(
+            ids=["closet_w_r_shared_01"],
+            documents=["JWT auth|;|→drawer_A_chunk_000000"],
+            metadatas=[{"wing": "w", "room": "r", "source_file": source}],
+        )
+
+        result = search_memories("JWT auth", palace_path)
+        boosted = [h for h in result["results"] if h["matched_via"] == "drawer+closet"]
+        assert boosted, "hybrid search should mark the closet-agreeing source as drawer+closet"
+        top = boosted[0]
+        assert "ALPHA_GROUP_A" in top["text"], (
+            "group A's content is missing from its own enriched result"
+        )
+        assert "BRAVO_GROUP_B" not in top["text"], (
+            "group B's content leaked into group A's enriched result — "
+            "violates #1580 at the search_memories enrichment site"
+        )

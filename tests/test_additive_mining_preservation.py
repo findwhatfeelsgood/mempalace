@@ -595,16 +595,19 @@ class TestNeighborExpansionScopedByParentDrawerId:
         Uses non-empty source_file with two parent_drawer_ids deliberately
         sharing it. This is the case where the ``if not src`` early-return
         guard in _expand_with_neighbors does NOT short-circuit — so the
-        $and-filter logic actually runs. (The earlier version of this test
-        was a false-positive: it used empty source_file, which short-
-        circuits before reaching the filter, so the test passed regardless
-        of whether the filter was correct. Gemini caught the underlying
-        ChromaDB $and-limit-2 bug in the filter when the real path was
-        exercised; this test now pins the failure space.)
+        $and-filter logic actually runs.
+
+        Uses ``palace.get_collection()`` (the production path through the
+        ``ChromaCollection`` wrapper) rather than a raw chromadb client.
+        The wrapper's ``GetResult`` dataclass supports both ``.documents``
+        and ``["documents"]`` access; the raw client only supports the
+        latter. Testing through the wrapper matches what production
+        actually exercises — flagged by @mvalentsev on PR #1628.
         """
+        from mempalace.palace import get_collection
+
         palace = tmp_path / "palace"
-        client = chromadb.PersistentClient(path=str(palace))
-        col = client.get_or_create_collection("mempalace_drawers")
+        col = get_collection(str(palace), create=True)
 
         # Two distinct mining passes of the same source_file produce two
         # parent_drawer_ids that share source_file — the exact shape #1580
