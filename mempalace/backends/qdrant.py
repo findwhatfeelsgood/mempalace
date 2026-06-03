@@ -1027,18 +1027,20 @@ class QdrantCollection(BaseCollection):
         q_filter = None if _requires_local_filter(where) else _qdrant_filter(where)
         rows = []
         text_filter = _text_any_filter(query)
+        text_filter_success = False
         if text_filter:
             try:
                 rows = self._scroll_all(
                     qdrant_filter=_combine_filters(q_filter, text_filter),
                     with_vector=False,
                 )
+                text_filter_success = True
             except BackendError:
                 logger.debug(
                     "Qdrant text filter failed; falling back to lexical scan", exc_info=True
                 )
                 rows = []
-        if not rows:
+        if not text_filter_success:
             rows = self._scroll_all(qdrant_filter=q_filter, with_vector=False)
         rows = [row for row in rows if _matches_where(row["metadata"], where)]
         scores = _bm25_scores(query, [row["document"] for row in rows])

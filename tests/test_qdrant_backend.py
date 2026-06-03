@@ -78,6 +78,7 @@ class _FakeQdrantClient:
     def __init__(self, _config):
         self.collections = {}
         self.query_calls = []
+        self.scroll_calls = []
         self.created_indexes = []
         _FakeQdrantClient.instances.append(self)
 
@@ -143,6 +144,7 @@ class _FakeQdrantClient:
         offset=None,
         with_vector=False,
     ):
+        self.scroll_calls.append(qdrant_filter)
         points = list(self.collections.get(collection, {"points": {}})["points"].values())
         points = [point for point in points if _fake_match_filter(point, qdrant_filter)]
         start = int(offset or 0)
@@ -310,6 +312,24 @@ def test_qdrant_complex_filters_use_exact_local_fallback(tmp_path, fake_qdrant):
 
     assert result.ids == [["a"]]
     assert fake_client.query_calls == []
+
+
+def test_qdrant_lexical_empty_text_filter_does_not_full_scan(tmp_path, fake_qdrant):
+    _backend, col = _collection(tmp_path)
+    col.upsert(
+        ids=["a", "b"],
+        documents=["alpha backend note", "beta frontend note"],
+        metadatas=[{"wing": "project"}, {"wing": "project"}],
+        embeddings=[[1, 0], [0, 1]],
+    )
+    fake_client = fake_qdrant.instances[0]
+    fake_client.scroll_calls.clear()
+
+    hits = col.lexical_search(query="missingterm", n_results=2).hits
+
+    assert hits == []
+    assert len(fake_client.scroll_calls) == 1
+    assert "text_any" in str(fake_client.scroll_calls[0])
 
 
 def test_qdrant_dimension_mismatch(tmp_path, fake_qdrant):
