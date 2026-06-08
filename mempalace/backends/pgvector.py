@@ -686,6 +686,12 @@ class PgVectorCollection(BaseCollection):
     def _marker_exists(self) -> bool:
         return self._backend._marker_exists(self._palace)
 
+    def get_stored_embedder_identity(self):
+        return self._backend._get_embedder_identity(self._palace, self._collection_name)
+
+    def set_embedder_identity(self, identity) -> None:
+        self._backend._set_embedder_identity(self._palace, self._collection_name, identity)
+
     def _ensure_table(self, dimension: int) -> None:
         if dimension <= 0:
             raise ValueError("embedding dimension must be positive")
@@ -1132,7 +1138,60 @@ class PgVectorBackend(BaseBackend):
             "palace_id": palace.id,
             "pgvector": self._marker_target(palace, config),
         }
+        # Preserve recorded embedder identities across marker rewrites — a
+        # rebuilt marker must not wipe per-collection model-name tracking.
+        try:
+            existing = self._read_marker(palace)
+        except BackendMismatchError:
+            existing = None
+        if isinstance(existing, dict) and isinstance(existing.get("embedders"), dict):
+            marker["embedders"] = existing["embedders"]
         marker_path = self._marker_path(palace.local_path)
+        with open(marker_path, "w", encoding="utf-8") as f:
+            json.dump(marker, f, indent=2, ensure_ascii=False)
+        try:
+            os.chmod(marker_path, 0o600)
+        except (OSError, NotImplementedError):
+            pass
+
+    def _get_embedder_identity(self, palace: PalaceRef, collection_name: str):
+        from .base import EmbedderIdentity
+
+        try:
+            marker = self._read_marker(palace)
+        except BackendMismatchError:
+            return None
+        if not isinstance(marker, dict):
+            return None
+        embedders = marker.get("embedders")
+        if not isinstance(embedders, dict):
+            return None
+        entry = embedders.get(collection_name)
+        if not isinstance(entry, dict) or not entry.get("model_name"):
+            return None
+        return EmbedderIdentity(
+            model_name=str(entry["model_name"]),
+            dimension=int(entry.get("dimension") or 0),
+        )
+
+    def _set_embedder_identity(self, palace: PalaceRef, collection_name: str, identity) -> None:
+        if not palace.local_path or not identity or not identity.model_name:
+            return
+        marker_path = self._marker_path(palace.local_path)
+        if not os.path.isfile(marker_path):
+            return
+        try:
+            marker = self._read_marker(palace) or {}
+        except BackendMismatchError:
+            return
+        embedders = marker.get("embedders")
+        if not isinstance(embedders, dict):
+            embedders = {}
+        embedders[collection_name] = {
+            "model_name": str(identity.model_name),
+            "dimension": int(identity.dimension or 0),
+        }
+        marker["embedders"] = embedders
         with open(marker_path, "w", encoding="utf-8") as f:
             json.dump(marker, f, indent=2, ensure_ascii=False)
         try:

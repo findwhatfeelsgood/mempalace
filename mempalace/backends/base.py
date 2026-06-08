@@ -15,7 +15,7 @@ conformance suite land in follow-up PRs.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import ClassVar, Optional
+from typing import ClassVar, Optional, Protocol, runtime_checkable
 
 
 # ---------------------------------------------------------------------------
@@ -74,6 +74,15 @@ class EmbedderIdentityMismatchError(BackendError):
     """Raised when the stored embedder model name differs from the current one."""
 
 
+class EmbedderIdentityUnknownWarning(UserWarning):
+    """Emitted on first open of a collection with no recorded embedder identity.
+
+    Legacy palaces created before identity tracking carry no model name. Per
+    RFC 001 the right behavior is warn-not-fail: the identity is recorded on
+    the next write and subsequent opens become strict.
+    """
+
+
 # ---------------------------------------------------------------------------
 # Value objects
 # ---------------------------------------------------------------------------
@@ -114,6 +123,91 @@ class PalaceRef:
     id: str
     local_path: Optional[str] = None
     namespace: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class EmbedderIdentity:
+    """Identity of the embedder that produced a collection's vectors (RFC 001).
+
+    ``model_name`` is the stable identity persisted alongside a collection and
+    checked on subsequent opens. ``dimension`` is the vector width. A
+    ``dimension`` of ``0`` means *unknown / not probed* — comparisons treat it
+    as "no dimension signal" rather than a real zero-width vector, so a cheap
+    read-path check can compare model names without loading the model.
+    """
+
+    model_name: str
+    dimension: int = 0
+
+
+@runtime_checkable
+class Embedder(Protocol):
+    """Minimal embedder contract (RFC 001, normative for identity checking).
+
+    The fuller embedder RFC (batching/async/pooling) is additive; identity
+    enforcement depends only on these three members.
+    """
+
+    model_name: str
+    dimension: int
+
+    def embed(self, texts: list[str]) -> list[list[float]]: ...
+
+
+def check_embedder_identity(
+    stored: Optional[EmbedderIdentity],
+    current: Optional[EmbedderIdentity],
+    *,
+    force_model_swap: bool = False,
+) -> str:
+    """Three-state embedder-identity check (RFC 001).
+
+    Returns the resolved state and raises on a hard, unforced conflict:
+
+    * ``"unknown"`` — no identity recorded yet (legacy collection), or the
+      current embedder is nameless. The caller warns and records on write.
+    * ``"known_match"`` — stored name (and dimension, when both known) equal
+      the current embedder. Proceed normally.
+    * ``"known_mismatch"`` — names or dimensions differ. Without
+      ``force_model_swap`` this raises (:class:`EmbedderIdentityMismatchError`
+      for a model swap, :class:`DimensionMismatchError` for a width change,
+      which is checked first because mismatched vectors are physically
+      unusable). With ``force_model_swap`` it returns the state so the caller
+      can re-record the identity and log the swap.
+
+    A ``dimension`` of ``0`` on either side means "unknown" and is skipped, so
+    a model-name-only check (cheap read path) still works.
+    """
+    if current is None or not current.model_name:
+        return "unknown"
+    if stored is None:
+        return "unknown"
+
+    dim_conflict = bool(stored.dimension and current.dimension) and (
+        stored.dimension != current.dimension
+    )
+    name_conflict = stored.model_name != current.model_name
+
+    if not dim_conflict and not name_conflict:
+        return "known_match"
+
+    if force_model_swap:
+        return "known_mismatch"
+
+    if dim_conflict:
+        raise DimensionMismatchError(
+            f"collection was built with a {stored.dimension}-dim embedder "
+            f"({stored.model_name!r}) but the current embedder is "
+            f"{current.dimension}-dim ({current.model_name!r}); the stored "
+            "vectors are incompatible. Re-embed the palace to switch models."
+        )
+    raise EmbedderIdentityMismatchError(
+        f"collection was built with embedder {stored.model_name!r} but the "
+        f"current embedder is {current.model_name!r}. Searching across a model "
+        "swap silently degrades recall. Re-embed the palace, or run "
+        "`mempalace palace set-embedder --model <name> --force` to record the "
+        "new identity if you know the vectors are compatible."
+    )
 
 
 @dataclass(frozen=True)
@@ -311,6 +405,36 @@ class BaseCollection(ABC):
         this to report their actual space so core ranking converts correctly.
         """
         return "cosine"
+
+    def get_stored_embedder_identity(self) -> Optional[EmbedderIdentity]:
+        """Return the embedder identity recorded for this collection, if any.
+
+        Returns ``None`` when nothing is recorded — a legacy collection, or a
+        backend that does not yet persist identity. Core treats ``None`` as the
+        ``unknown`` state (warn, do not fail). Backends override this and
+        :meth:`set_embedder_identity` against their own metadata store.
+        """
+        return None
+
+    def set_embedder_identity(self, identity: EmbedderIdentity) -> None:
+        """Persist this collection's embedder identity. Default: no-op.
+
+        A backend without an identity slot inherits the no-op default and so
+        stays permanently ``unknown`` (safe — it simply never enforces). The
+        enforcement choke point calls this when recording on first write or
+        on an explicit, forced model swap.
+        """
+        return None
+
+    def effective_embedder_identity(self) -> Optional[EmbedderIdentity]:
+        """The identity of the embedder this collection actually uses.
+
+        For ``server_embedder`` backends that ignore the injected embedder,
+        this reports the server-side embedder so the same identity rules apply
+        (RFC 001). Defaults to ``None`` — the collection is embedded by the
+        injected/core embedder, and the caller supplies the current identity.
+        """
+        return None
 
     def lexical_search(
         self,

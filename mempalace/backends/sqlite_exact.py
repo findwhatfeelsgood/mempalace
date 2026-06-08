@@ -322,6 +322,36 @@ class SQLiteExactCollection(BaseCollection):
         row = cur.execute("SELECT value FROM meta WHERE key = 'fts5_available'").fetchone()
         return bool(row and row[0] == "1")
 
+    def _embedder_meta_key(self) -> str:
+        return f"embedder_model:{self._collection_name}"
+
+    def get_stored_embedder_identity(self):
+        from .base import EmbedderIdentity
+
+        with self._cursor() as cur:
+            try:
+                cid = self._collection_id(cur)
+            except CollectionNotInitializedError:
+                return None
+            row = cur.execute(
+                "SELECT value FROM meta WHERE key = ?",
+                (self._embedder_meta_key(),),
+            ).fetchone()
+            if not row or not row[0]:
+                return None
+            dim = self._collection_dimension(cur, cid) or 0
+            return EmbedderIdentity(model_name=str(row[0]), dimension=int(dim))
+
+    def set_embedder_identity(self, identity) -> None:
+        if not identity or not identity.model_name:
+            return
+        with self._cursor() as cur:
+            cur.execute(
+                "INSERT INTO meta(key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (self._embedder_meta_key(), str(identity.model_name)),
+            )
+
     def _replace_fts(self, cur, collection_id: int, doc_id: str, document: str) -> None:
         if not self._fts_available(cur):
             return
