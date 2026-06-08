@@ -169,6 +169,15 @@ markers = [
     "slow: tests that take more than 30 seconds",
     "stress: destructive scale tests (100K+ drawers)",
 ]
+filterwarnings = [
+    # Many tests build raw-chromadb palaces directly (no recorded embedder
+    # identity), which correctly emits this on open. The behavior itself is
+    # asserted in tests/test_embedder_identity.py; ignore the fixture noise.
+    # Matched by message (not by class path) so pytest does not import the
+    # mempalace package at config time — importing it before coverage starts
+    # would drop module-level lines from the report.
+    "ignore:palace collection.*has no recorded embedder identity",
+]
 
 [tool.coverage.run]
 source = ["mempalace"]

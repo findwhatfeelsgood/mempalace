@@ -1741,6 +1741,70 @@ class ChromaCollection(BaseCollection):
             return space
         return "l2"
 
+    # ------------------------------------------------------------------
+    # Embedder identity (RFC 001)
+    #
+    # Stored in a small sidecar JSON in the palace dir rather than the Chroma
+    # collection metadata: ``collection.modify(metadata=...)`` replaces the
+    # whole dict and some Chroma versions reject re-passing the immutable
+    # ``hnsw:*`` construction keys, so mutating it on every open is fragile.
+    # The sidecar is keyed by collection name (a palace may hold several).
+    # This is complementary to Chroma's own embedding-function-name check —
+    # the core check runs at open time and yields the clean cross-backend
+    # error before Chroma's read-time rejection fires.
+    # ------------------------------------------------------------------
+    def _embedder_sidecar_path(self) -> Optional[str]:
+        if not self._palace_path:
+            return None
+        return os.path.join(self._palace_path, "mempalace_embedder.json")
+
+    def get_stored_embedder_identity(self):
+        from .base import EmbedderIdentity
+
+        path = self._embedder_sidecar_path()
+        name = self._collection_name()
+        if not path or not name or not os.path.isfile(path):
+            return None
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return None
+        if not isinstance(data, dict):
+            return None
+        entry = data.get(name)
+        if not isinstance(entry, dict) or not entry.get("model_name"):
+            return None
+        return EmbedderIdentity(
+            model_name=str(entry["model_name"]),
+            dimension=int(entry.get("dimension") or 0),
+        )
+
+    def set_embedder_identity(self, identity) -> None:
+        path = self._embedder_sidecar_path()
+        name = self._collection_name()
+        if not path or not name or not identity or not identity.model_name:
+            return
+        data: dict = {}
+        if os.path.isfile(path):
+            try:
+                with open(path, encoding="utf-8") as f:
+                    loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    data = loaded
+            except (OSError, json.JSONDecodeError):
+                data = {}
+        data[name] = {
+            "model_name": str(identity.model_name),
+            "dimension": int(identity.dimension or 0),
+        }
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            os.chmod(path, 0o600)
+        except (OSError, NotImplementedError):
+            pass
+
 
 # ---------------------------------------------------------------------------
 # Backend
