@@ -1923,14 +1923,22 @@ def tool_update_drawer(drawer_id: str, content: str = None, wing: str = None, ro
         new_meta = dict(old_meta)
         if wing is not None:
             try:
-                new_meta["wing"] = sanitize_name(wing, "wing")
+                wing = sanitize_name(wing, "wing")
             except ValueError as e:
                 return {"success": False, "error": str(e)}
+            # Preserve existing casing when the caller passes a case-only
+            # variant (LLM clients often "autocorrect" acronyms like ps5→PS5).
+            if wing.lower() != str(old_meta.get("wing") or "").lower():
+                new_meta["wing"] = wing
         if room is not None:
             try:
-                new_meta["room"] = sanitize_name(room, "room")
+                room = sanitize_name(room, "room")
             except ValueError as e:
                 return {"success": False, "error": str(e)}
+            # Preserve existing casing when the caller passes a case-only
+            # variant (LLM clients often "autocorrect" acronyms like ps5→PS5).
+            if room.lower() != str(old_meta.get("room") or "").lower():
+                new_meta["room"] = room
 
         _wal_log(
             "update_drawer",
