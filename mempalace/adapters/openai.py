@@ -84,8 +84,9 @@ class SaveCadence:
         return self.count % self.interval == 0
 
     def pending(self) -> bool:
-        """True if a save is currently due (interval boundary reached)."""
-        return self.count % self.interval == 0
+        """True if there are turns recorded since the last reset that an interval
+        flush has not yet covered (drives the session-end flush)."""
+        return self.count % self.interval != 0
 
     def reset(self) -> None:
         self.count = 0

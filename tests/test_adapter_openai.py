@@ -58,14 +58,22 @@ def test_save_cadence_fires_every_interval():
     assert results == [False, False, True, False, False, True, False]
 
 
-def test_save_cadence_due_and_reset():
-    cadence = adapter.SaveCadence(interval=2)
-    cadence.tick()           # count 1
-    assert cadence.pending() is False
-    cadence.tick()           # count 2 -> due
-    # tick() already returned True at the boundary; pending tracks "unsaved turns exist"
-    cadence.reset()
-    assert cadence.count == 0
+def test_save_cadence_pending_tracks_unsaved_turns():
+    c = adapter.SaveCadence(interval=15)
+    assert c.pending() is False            # nothing recorded yet
+    for _ in range(7):
+        c.tick()
+    assert c.pending() is True             # 7 unsaved turns -> session-end must flush
+    c.reset()
+    assert c.pending() is False and c.count == 0
+
+
+def test_save_cadence_pending_false_at_interval_boundary():
+    c = adapter.SaveCadence(interval=2)
+    assert c.tick() is False               # count 1
+    assert c.pending() is True             # one unsaved turn pending
+    assert c.tick() is True                # count 2 -> due (boundary)
+    assert c.pending() is False            # boundary reached; the due-flush covers it
 
 
 def test_save_cadence_rejects_bad_interval():
