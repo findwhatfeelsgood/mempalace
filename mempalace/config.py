@@ -215,6 +215,13 @@ class MempalaceConfig:
     def session(self):
         return os.environ.get("MEMPALACE_SESSION") or None
 
+    @property
+    def registry_path(self):
+        env = os.environ.get("MEMPALACE_REGISTRY_PATH")
+        if env:
+            return env
+        return str(self._config_dir / "wing_registry.yaml")
+
     def provenance(self) -> dict:
         """Provenance metadata for a write. Omits keys with no value, because
         ChromaDB metadata rejects None. harness/machine always present."""

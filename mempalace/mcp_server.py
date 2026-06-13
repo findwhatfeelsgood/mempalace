@@ -32,6 +32,7 @@ from pathlib import Path
 
 from .config import MempalaceConfig, sanitize_name, sanitize_content
 from .version import __version__
+from . import wing_registry as _wr
 import chromadb
 from .query_sanitizer import sanitize_query
 from .searcher import search_memories
@@ -580,6 +581,10 @@ def tool_add_drawer(
     except ValueError as e:
         return {"success": False, "error": str(e)}
 
+    _reg = _wr.load_registry(_config.registry_path)
+    _canon = _wr.canonicalize_wing(wing, account=_config.account, kind="project", registry=_reg)
+    wing = _canon.slug
+
     col = _get_collection(create=True)
     if not col:
         return _no_palace()
@@ -616,6 +621,7 @@ def tool_add_drawer(
             "chunk_index": 0,
             "added_by": added_by,
             "filed_at": datetime.now().isoformat(),
+            "wing_status": _canon.status,
         }
         prov = _config.provenance()
         if model:
@@ -901,7 +907,8 @@ def tool_diary_write(agent_name: str, entry: str, topic: str = "general", model:
     except ValueError as e:
         return {"success": False, "error": str(e)}
 
-    wing = f"wing_{agent_name.lower().replace(' ', '_')}"
+    agent_slug = _wr.canonicalize_agent(agent_name)
+    wing = f"wing_{agent_slug}"
     room = "diary"
     col = _get_collection(create=True)
     if not col:
@@ -937,6 +944,7 @@ def tool_diary_write(agent_name: str, entry: str, topic: str = "general", model:
             "agent": agent_name,
             "filed_at": now.isoformat(),
             "date": now.strftime("%Y-%m-%d"),
+            "wing_status": "canonical",
         }
         prov = _config.provenance()
         if model:

@@ -65,3 +65,26 @@ def test_diary_write_stamps_provenance(monkeypatch, tmp_path):
     assert meta["harness"] == "claude-code"
     assert meta["model"] == "claude-opus-4-8"
     assert meta["account"] == "alan@fwfg.com"
+
+
+def test_add_drawer_canonicalizes_wing_via_registry(monkeypatch, tmp_path):
+    palace = tmp_path / "palace3"
+    monkeypatch.setenv("MEMPALACE_PALACE_PATH", str(palace))
+    monkeypatch.setenv("MEMPALACE_HARNESS", "openai-agents-sdk")
+    monkeypatch.setenv("MEMPALACE_ACCOUNT", "alan@fwfg.com")
+    from mempalace import wing_registry as wr
+    reg_path = tmp_path / "wing_registry.yaml"
+    wr.save_registry(wr.Registry(entries=[wr.WingEntry(
+        slug="fwfg-deploy", kind="project", account="alan@fwfg.com", aliases=["fwfg_deploy"])]), reg_path)
+    monkeypatch.setenv("MEMPALACE_REGISTRY_PATH", str(reg_path))
+
+    import mempalace.config as config
+    import mempalace.mcp_server as srv
+    importlib.reload(config)
+    importlib.reload(srv)
+
+    res = srv.tool_add_drawer(wing="fwfg_deploy", room="decisions", content="x y z")
+    assert res["wing"] == "fwfg-deploy"          # canonicalized
+    meta = srv._get_collection().get(ids=[res["drawer_id"]], include=["metadatas"])["metadatas"][0]
+    assert meta["wing"] == "fwfg-deploy"
+    assert meta["wing_status"] == "canonical"
