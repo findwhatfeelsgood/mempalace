@@ -6,6 +6,7 @@ Priority: env vars > config file (~/.mempalace/config.json) > defaults
 
 import json
 import os
+import platform
 import re
 from pathlib import Path
 
@@ -193,6 +194,38 @@ class MempalaceConfig:
                 json.dump(self._file_config, f, indent=2, ensure_ascii=False)
         except OSError:
             pass
+
+    @property
+    def harness(self):
+        return os.environ.get("MEMPALACE_HARNESS") or "unknown"
+
+    @property
+    def model(self):
+        return os.environ.get("MEMPALACE_MODEL") or None
+
+    @property
+    def account(self):
+        return os.environ.get("MEMPALACE_ACCOUNT") or None
+
+    @property
+    def machine(self):
+        return os.environ.get("MEMPALACE_MACHINE") or (platform.node() or "").lower() or "unknown"
+
+    @property
+    def session(self):
+        return os.environ.get("MEMPALACE_SESSION") or None
+
+    def provenance(self) -> dict:
+        """Provenance metadata for a write. Omits keys with no value, because
+        ChromaDB metadata rejects None. harness/machine always present."""
+        prov = {"harness": self.harness, "machine": self.machine}
+        if self.model:
+            prov["model"] = self.model
+        if self.account:
+            prov["account"] = self.account
+        if self.session:
+            prov["session"] = self.session
+        return prov
 
     def init(self):
         """Create config directory and write default config.json if it doesn't exist."""
