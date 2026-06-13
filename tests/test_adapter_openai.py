@@ -158,3 +158,17 @@ def test_flush_due_second_attempt_succeeds():
 
     adapter.flush_due(saves_on_retry)  # no raise
     assert state["n"] == 2
+
+
+def test_build_mcp_server_requires_sdk_or_returns_server(monkeypatch):
+    # If the SDK is absent, build_mcp_server raises a clear, actionable error.
+    import importlib.util
+    have_sdk = importlib.util.find_spec("agents") is not None
+    if not have_sdk:
+        with pytest.raises(ImportError) as ei:
+            adapter.build_mcp_server(account="alan@fwfg.com")
+        assert "openai-agents" in str(ei.value)
+    else:
+        srv = adapter.build_mcp_server(account="alan@fwfg.com", model="gpt-4o")
+        # It's an MCPServerStdio configured with our provenance params.
+        assert srv is not None

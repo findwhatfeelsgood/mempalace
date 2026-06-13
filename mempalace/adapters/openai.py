@@ -112,6 +112,26 @@ def saved_in_result(run_result) -> bool:
     return False
 
 
+def build_mcp_server(*, account: str | None, model: str | None = None,
+                     palace_path: str | None = None, registry_path: str | None = None,
+                     session: str | None = None, name: str = "mempalace"):
+    """Create an agents.mcp.MCPServerStdio wired with provenance env.
+
+    Returns an async-context-manager server to pass to Agent(mcp_servers=[...]).
+    Raises ImportError with an install hint if the OpenAI Agents SDK is absent.
+    """
+    try:
+        from agents.mcp import MCPServerStdio
+    except ImportError as e:  # pragma: no cover - exercised only when SDK absent
+        raise ImportError(
+            "The OpenAI Agents SDK is required for build_mcp_server. "
+            "Install it with: pip install 'mempalace[openai]' (or pip install openai-agents)."
+        ) from e
+    params = mcp_server_params(account=account, model=model, palace_path=palace_path,
+                               registry_path=registry_path, session=session)
+    return MCPServerStdio(name=name, params=params)
+
+
 SAVE_PROMPT = (
     "MemPalace checkpoint: save this session's key content now. Call "
     "mempalace_diary_write with an AAAK-compressed summary, and mempalace_add_drawer "
