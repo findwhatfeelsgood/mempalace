@@ -1,3 +1,5 @@
+import importlib
+
 from mempalace.config import MempalaceConfig
 
 
@@ -23,3 +25,23 @@ def test_provenance_from_env(monkeypatch, tmp_path):
         "harness": "openai-agents-sdk", "model": "gpt-4o",
         "account": "alan@fwfg.com", "machine": "laptop-7", "session": "run-123",
     }
+
+
+def test_add_drawer_stamps_provenance(monkeypatch, tmp_path):
+    monkeypatch.setenv("MEMPALACE_PALACE_PATH", str(tmp_path / "palace"))
+    monkeypatch.setenv("MEMPALACE_HARNESS", "openai-agents-sdk")
+    monkeypatch.setenv("MEMPALACE_ACCOUNT", "alan@fwfg.com")
+    monkeypatch.delenv("MEMPALACE_MODEL", raising=False)
+    import mempalace.config as config
+    import mempalace.mcp_server as srv
+    importlib.reload(config)
+    importlib.reload(srv)
+
+    res = srv.tool_add_drawer(wing="provtest", room="r", content="hello world", model="gpt-4o")
+    assert res["success"]
+    got = srv._get_collection().get(ids=[res["drawer_id"]], include=["metadatas"])
+    meta = got["metadatas"][0]
+    assert meta["harness"] == "openai-agents-sdk"
+    assert meta["account"] == "alan@fwfg.com"
+    assert meta["model"] == "gpt-4o"          # per-call override wins over (unset) env
+    assert meta["machine"]

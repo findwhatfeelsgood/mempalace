@@ -568,7 +568,8 @@ def tool_follow_tunnels(wing: str, room: str):
 
 
 def tool_add_drawer(
-    wing: str, room: str, content: str, source_file: str = None, added_by: str = "mcp"
+    wing: str, room: str, content: str, source_file: str = None,
+    added_by: str = "mcp", model: str = None
 ):
     """File verbatim content into a wing/room. Checks for duplicates first."""
     global _metadata_cache
@@ -608,19 +609,22 @@ def tool_add_drawer(
         pass
 
     try:
+        meta = {
+            "wing": wing,
+            "room": room,
+            "source_file": source_file or "",
+            "chunk_index": 0,
+            "added_by": added_by,
+            "filed_at": datetime.now().isoformat(),
+        }
+        prov = _config.provenance()
+        if model:
+            prov["model"] = model
+        meta.update(prov)
         col.upsert(
             ids=[drawer_id],
             documents=[content],
-            metadatas=[
-                {
-                    "wing": wing,
-                    "room": room,
-                    "source_file": source_file or "",
-                    "chunk_index": 0,
-                    "added_by": added_by,
-                    "filed_at": datetime.now().isoformat(),
-                }
-            ],
+            metadatas=[meta],
         )
         _metadata_cache = None
         logger.info(f"Filed drawer: {drawer_id} → {wing}/{room}")
@@ -1373,6 +1377,7 @@ TOOLS = {
                 },
                 "source_file": {"type": "string", "description": "Where this came from (optional)"},
                 "added_by": {"type": "string", "description": "Who is filing this (default: mcp)"},
+                "model": {"type": "string", "description": "Override the model for this write (default: server env)"},
             },
             "required": ["wing", "room", "content"],
         },
