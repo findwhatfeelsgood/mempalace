@@ -132,6 +132,30 @@ def build_mcp_server(*, account: str | None, model: str | None = None,
     return MCPServerStdio(name=name, params=params)
 
 
+def make_run_hooks(cadence: "SaveCadence"):
+    """Build an agents.RunHooks that ticks `cadence` once per completed turn
+    (on_agent_end). Raises ImportError with an install hint if the SDK is absent.
+    The boolean 'due' is read from cadence.tick()'s effect via cadence.pending()
+    after each turn by the chat loop; the hook only advances the counter."""
+    try:
+        from agents import RunHooks
+    except ImportError as e:  # pragma: no cover - exercised only when SDK absent
+        raise ImportError(
+            "The OpenAI Agents SDK is required for make_run_hooks. "
+            "Install it with: pip install 'mempalace[openai]' (or pip install openai-agents)."
+        ) from e
+
+    class _MemPalaceRunHooks(RunHooks):
+        def __init__(self, cadence):
+            self._cadence = cadence
+            self.last_due = False
+
+        async def on_agent_end(self, context, agent, output):
+            self.last_due = self._cadence.tick()
+
+    return _MemPalaceRunHooks(cadence)
+
+
 SAVE_PROMPT = (
     "MemPalace checkpoint: save this session's key content now. Call "
     "mempalace_diary_write with an AAAK-compressed summary, and mempalace_add_drawer "

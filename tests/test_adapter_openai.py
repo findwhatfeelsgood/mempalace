@@ -172,3 +172,18 @@ def test_build_mcp_server_requires_sdk_or_returns_server(monkeypatch):
         srv = adapter.build_mcp_server(account="alan@fwfg.com", model="gpt-4o")
         # It's an MCPServerStdio configured with our provenance params.
         assert srv is not None
+
+
+def test_make_run_hooks_requires_sdk_or_ticks(monkeypatch):
+    import importlib.util
+    cadence = adapter.SaveCadence(interval=2)
+    if importlib.util.find_spec("agents") is None:
+        with pytest.raises(ImportError) as ei:
+            adapter.make_run_hooks(cadence)
+        assert "openai-agents" in str(ei.value)
+    else:
+        import asyncio
+        hooks = adapter.make_run_hooks(cadence)
+        # on_agent_end ticks the cadence
+        asyncio.run(hooks.on_agent_end(None, None, "out"))
+        assert cadence.count == 1
