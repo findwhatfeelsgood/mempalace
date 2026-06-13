@@ -1,3 +1,5 @@
+import pytest
+
 from mempalace import wing_registry as wr
 
 
@@ -22,3 +24,41 @@ def test_save_then_load_roundtrip(tmp_path):
     reloaded = wr.load_registry(p)
     assert reloaded.entries[0].slug == "fwfg-deploy"
     assert "fwfg_deploy" in reloaded.entries[0].aliases
+
+
+@pytest.fixture
+def reg():
+    return wr.Registry(entries=[
+        wr.WingEntry(slug="fwfg-deploy", kind="project", account="alan@fwfg.com",
+                     aliases=["fwfg_deploy"]),
+        wr.WingEntry(slug="fwfg-data-warehouse", kind="project", account="alan@fwfg.com"),
+        wr.WingEntry(slug="pdev-foundation", kind="project", account="ja.powell@gmail.com"),
+    ])
+
+
+def test_exact_alias_match_is_canonical(reg):
+    r = wr.canonicalize_wing("fwfg_deploy", account="alan@fwfg.com", kind="project", registry=reg)
+    assert r.slug == "fwfg-deploy" and r.status == "canonical"
+
+
+def test_high_confidence_fuzzy_is_canonical_no_alias_learn(reg):
+    r = wr.canonicalize_wing("fwfg-data-warehous", account="alan@fwfg.com", kind="project", registry=reg)
+    assert r.slug == "fwfg-data-warehouse" and r.status == "canonical"
+    # no auto-learn: alias list unchanged
+    assert "fwfg-data-warehous" not in [a for e in reg.entries for a in e.aliases]
+
+
+def test_no_match_is_provisional(reg):
+    r = wr.canonicalize_wing("brand-new-thing", account="alan@fwfg.com", kind="project", registry=reg)
+    assert r.slug == "brand-new-thing" and r.status == "provisional"
+
+
+def test_other_account_wing_never_canonicalizes(reg):
+    r = wr.canonicalize_wing("pdev-foundation", account="alan@fwfg.com", kind="project", registry=reg)
+    assert r.status == "provisional" and r.slug == "pdev-foundation"
+
+
+def test_missing_registry_is_unverified(tmp_path):
+    r = wr.canonicalize_wing("whatever", account="alan@fwfg.com", kind="project",
+                             registry=wr.load_registry(tmp_path / "absent.yaml"))
+    assert r.status == "unverified" and r.slug == "whatever"
