@@ -7,7 +7,44 @@ Pure helpers (no SDK import) so they're testable without the OpenAI API:
   saved_in_result()     - verify a run actually wrote to the palace
 
 SDK-coupled helpers import `agents` lazily (optional dependency):
-  build_mcp_server(), MemPalaceRunHooks
+  build_mcp_server(), make_run_hooks()
+
+Example (chat loop with deterministic auto-save)::
+
+    import asyncio
+    from agents import Agent, Runner
+    from mempalace.adapters import openai as mp
+
+    async def main():
+        cadence = mp.SaveCadence(interval=15)
+        hooks = mp.make_run_hooks(cadence)
+        async with mp.build_mcp_server(account="alan@fwfg.com", model="gpt-4o") as server:
+            agent = Agent(
+                name="CFO",
+                instructions=mp.with_memory_instructions("You are Alan's analyst."),
+                model="gpt-4o",
+                mcp_servers=[server],
+            )
+
+            async def run(text):
+                return await Runner.run(agent, text, hooks=hooks)
+
+            while (user := input("> ")) not in ("exit", "quit"):
+                result = await run(user)
+                print(result.final_output)
+                if hooks.last_due:                 # interval reached this turn
+                    await _flush(run)
+                    cadence.reset()
+            if cadence.pending():                  # session-end: save leftover turns
+                await _flush(run)
+
+    async def _flush(run):
+        # flush_due wants a sync callable; await the save run, then verify it wrote.
+        result = await run(mp.SAVE_PROMPT)
+        if not mp.saved_in_result(result):
+            raise mp.FlushError("model did not write to the palace")
+
+    asyncio.run(main())
 """
 from __future__ import annotations
 
