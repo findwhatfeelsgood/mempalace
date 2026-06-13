@@ -680,6 +680,8 @@ def tool_register_wing(slug: str, display: str = "", description: str = "",
     Account comes from the server env (MEMPALACE_ACCOUNT)."""
     try:
         slug = sanitize_name(slug, "slug")
+        if merge_alias is not None:
+            merge_alias = sanitize_name(merge_alias, "merge_alias")
     except ValueError as e:
         return {"success": False, "error": str(e)}
     reg = _wr.load_registry(_config.registry_path)
@@ -994,7 +996,7 @@ def tool_diary_write(agent_name: str, entry: str, topic: str = "general", model:
             "agent": agent_name,
             "filed_at": now.isoformat(),
             "date": now.strftime("%Y-%m-%d"),
-            "wing_status": "canonical",
+            "wing_status": "canonical",  # diary wings are deterministic per-agent, not registry-resolved
         }
         prov = _config.provenance()
         if model:

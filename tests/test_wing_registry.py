@@ -116,3 +116,16 @@ def test_tool_register_wing_persists(monkeypatch, tmp_path):
     assert out["success"] and out["slug"] == "brand-new-thing"
     reloaded = wr.load_registry(reg_path)
     assert any(e.slug == "brand-new-thing" for e in reloaded.entries)
+
+
+def test_tool_register_wing_rejects_unsafe_merge_alias(monkeypatch, tmp_path):
+    reg_path = tmp_path / "wing_registry.yaml"
+    monkeypatch.setenv("MEMPALACE_REGISTRY_PATH", str(reg_path))
+    monkeypatch.setenv("MEMPALACE_ACCOUNT", "alan@fwfg.com")
+    import importlib
+    import mempalace.config as config
+    import mempalace.mcp_server as srv
+    importlib.reload(config)
+    importlib.reload(srv)
+    out = srv.tool_register_wing(slug="ok-wing", merge_alias="../../etc/passwd")
+    assert out["success"] is False and "error" in out
