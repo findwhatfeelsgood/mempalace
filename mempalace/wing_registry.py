@@ -70,6 +70,15 @@ class CanonResult:
     matched: bool = False
 
 
+def canonicalize_agent(name: str) -> str:
+    """Return a bare writer slug. Strips any number of leading 'wing-'/'wing_'
+    segments so the storage layer can add the 'wing_' prefix exactly once."""
+    slug = normalize(name)
+    while slug.startswith("wing-"):
+        slug = slug[len("wing-"):]
+    return slug or "unknown"
+
+
 def canonicalize_wing(name: str, account: str | None, kind: str, registry: Registry) -> CanonResult:
     """Resolve `name` to a canonical wing slug, scoped to account+kind.
 

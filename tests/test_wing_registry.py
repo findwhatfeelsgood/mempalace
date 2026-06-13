@@ -62,3 +62,10 @@ def test_missing_registry_is_unverified(tmp_path):
     r = wr.canonicalize_wing("whatever", account="alan@fwfg.com", kind="project",
                              registry=wr.load_registry(tmp_path / "absent.yaml"))
     assert r.status == "unverified" and r.slug == "whatever"
+
+
+def test_canonicalize_agent_strips_wing_prefix_and_normalizes():
+    assert wr.canonicalize_agent("wing_claude-code") == "claude-code"
+    assert wr.canonicalize_agent("Claude Code") == "claude-code"
+    assert wr.canonicalize_agent("wing_wing_claude-code") == "claude-code"
+    assert wr.canonicalize_agent("openai-agents-sdk") == "openai-agents-sdk"
