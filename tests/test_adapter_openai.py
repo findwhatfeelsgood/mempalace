@@ -47,3 +47,26 @@ def test_with_memory_instructions_prepends_bootstrap():
 def test_with_memory_instructions_handles_empty_base():
     assert adapter.with_memory_instructions("") == adapter.BOOTSTRAP_INSTRUCTIONS
     assert adapter.with_memory_instructions(None) == adapter.BOOTSTRAP_INSTRUCTIONS
+
+
+def test_save_cadence_fires_every_interval():
+    cadence = adapter.SaveCadence(interval=3)
+    results = [cadence.tick() for _ in range(7)]
+    # fires on the 3rd and 6th tick only
+    assert results == [False, False, True, False, False, True, False]
+
+
+def test_save_cadence_due_and_reset():
+    cadence = adapter.SaveCadence(interval=2)
+    cadence.tick()           # count 1
+    assert cadence.pending() is False
+    cadence.tick()           # count 2 -> due
+    # tick() already returned True at the boundary; pending tracks "unsaved turns exist"
+    cadence.reset()
+    assert cadence.count == 0
+
+
+def test_save_cadence_rejects_bad_interval():
+    import pytest
+    with pytest.raises(ValueError):
+        adapter.SaveCadence(interval=0)

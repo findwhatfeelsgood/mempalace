@@ -64,3 +64,28 @@ def with_memory_instructions(base: str | None) -> str:
     if not base:
         return BOOTSTRAP_INSTRUCTIONS
     return f"{BOOTSTRAP_INSTRUCTIONS}\n\n{base}"
+
+
+class SaveCadence:
+    """Counts agent turns; signals a save every `interval` turns.
+
+    Deterministic and SDK-free so the auto-save policy is unit-testable.
+    """
+
+    def __init__(self, interval: int = 15):
+        if interval < 1:
+            raise ValueError("interval must be >= 1")
+        self.interval = interval
+        self.count = 0
+
+    def tick(self) -> bool:
+        """Record one completed turn; return True when a save is due."""
+        self.count += 1
+        return self.count % self.interval == 0
+
+    def pending(self) -> bool:
+        """True if a save is currently due (interval boundary reached)."""
+        return self.count % self.interval == 0
+
+    def reset(self) -> None:
+        self.count = 0
