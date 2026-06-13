@@ -89,3 +89,23 @@ class SaveCadence:
 
     def reset(self) -> None:
         self.count = 0
+
+
+WRITE_TOOLS = ("mempalace_diary_write", "mempalace_add_drawer")
+
+
+def saved_in_result(run_result) -> bool:
+    """True if the run made at least one MemPalace write-tool call.
+
+    Duck-typed against the Agents SDK RunResult (`.new_items`, each item a
+    tool_call_item whose `.raw_item.name` is the tool name) so it is testable
+    without the SDK.
+    """
+    items = getattr(run_result, "new_items", None) or []
+    for item in items:
+        if getattr(item, "type", None) != "tool_call_item":
+            continue
+        name = getattr(getattr(item, "raw_item", None), "name", None)
+        if name in WRITE_TOOLS:
+            return True
+    return False

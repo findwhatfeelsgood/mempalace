@@ -70,3 +70,45 @@ def test_save_cadence_rejects_bad_interval():
     import pytest
     with pytest.raises(ValueError):
         adapter.SaveCadence(interval=0)
+
+
+class _FakeRaw:
+    def __init__(self, name):
+        self.name = name
+
+
+class _FakeItem:
+    def __init__(self, type_, name=None):
+        self.type = type_
+        self.raw_item = _FakeRaw(name) if name else object()
+
+
+class _FakeResult:
+    def __init__(self, items):
+        self.new_items = items
+
+
+def test_saved_in_result_detects_diary_write():
+    res = _FakeResult([
+        _FakeItem("message_output_item"),
+        _FakeItem("tool_call_item", "mempalace_diary_write"),
+    ])
+    assert adapter.saved_in_result(res) is True
+
+
+def test_saved_in_result_detects_add_drawer():
+    res = _FakeResult([_FakeItem("tool_call_item", "mempalace_add_drawer")])
+    assert adapter.saved_in_result(res) is True
+
+
+def test_saved_in_result_false_when_no_write_tool():
+    res = _FakeResult([
+        _FakeItem("tool_call_item", "mempalace_search"),
+        _FakeItem("message_output_item"),
+    ])
+    assert adapter.saved_in_result(res) is False
+
+
+def test_saved_in_result_handles_missing_attrs():
+    assert adapter.saved_in_result(object()) is False
+    assert adapter.saved_in_result(_FakeResult([])) is False
