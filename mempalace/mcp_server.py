@@ -328,6 +328,41 @@ EXAMPLE:
 Read AAAK naturally — expand codes mentally, treat *markers* as emotional context.
 When WRITING AAAK: use entity codes, mark emotions, keep structure tight."""
 
+FILING_RULES = (
+    "Search before you write. File into an existing wing from the list below. "
+    "Propose a new wing only with create_wing=true on add_drawer (it will be flagged "
+    "provisional) or via mempalace_register_wing. Provenance (harness/model/account/"
+    "machine) is set by the environment — do not fabricate it."
+)
+
+
+def tool_bootstrap():
+    """One-call discovery payload for a fresh model: protocol, AAAK, account-scoped
+    wing lists, config warnings, and the server's provenance context."""
+    account = _config.account
+    reg = _wr.load_registry(_config.registry_path)
+    scoped = [e for e in reg.entries if (e.account or None) == (account or None)]
+    wings = [{"slug": e.slug, "kind": e.kind, "description": e.description}
+             for e in scoped if e.status == "active"]
+
+    warnings = []
+    if not account:
+        warnings.append("MEMPALACE_ACCOUNT is not set — writes will be unattributed to an account.")
+    if _config.harness == "unknown":
+        warnings.append("MEMPALACE_HARNESS is not set — harness will be recorded as 'unknown'.")
+    if not reg.entries:
+        warnings.append("Wing registry is empty or missing — wings will be stored as 'unverified'.")
+
+    return {
+        "protocol": PALACE_PROTOCOL,
+        "aaak_dialect": AAAK_SPEC,
+        "filing_rules": FILING_RULES,
+        "account": account,
+        "wings": wings,
+        "provenance": _config.provenance(),
+        "warnings": warnings,
+    }
+
 
 def tool_list_wings():
     col = _get_collection()
@@ -1137,6 +1172,11 @@ def tool_reconnect():
 # ==================== MCP PROTOCOL ====================
 
 TOOLS = {
+    "mempalace_bootstrap": {
+        "description": "Startup discovery: returns the MemPalace protocol, AAAK spec, account-scoped wing list, filing rules, config warnings, and this server's provenance context. Call once at session start and follow it.",
+        "input_schema": {"type": "object", "properties": {}},
+        "handler": tool_bootstrap,
+    },
     "mempalace_status": {
         "description": "Palace overview — total drawers, wing and room counts",
         "input_schema": {"type": "object", "properties": {}},
