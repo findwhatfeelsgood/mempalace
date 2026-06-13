@@ -639,6 +639,21 @@ def tool_add_drawer(
         return {"success": False, "error": str(e)}
 
 
+def tool_register_wing(slug: str, display: str = "", description: str = "",
+                       kind: str = "project", merge_alias: str = None):
+    """Promote a provisional wing to canonical, or merge an alias into an existing slug.
+    Account comes from the server env (MEMPALACE_ACCOUNT)."""
+    try:
+        slug = sanitize_name(slug, "slug")
+    except ValueError as e:
+        return {"success": False, "error": str(e)}
+    reg = _wr.load_registry(_config.registry_path)
+    out = _wr.register_wing(reg, slug=slug, account=_config.account, kind=kind,
+                            display=display, description=description, merge_alias=merge_alias)
+    _wr.save_registry(reg, _config.registry_path)
+    return {"success": True, "slug": out.slug, "status": out.status}
+
+
 def tool_delete_drawer(drawer_id: str):
     """Delete a single drawer by ID."""
     global _metadata_cache
@@ -1393,6 +1408,21 @@ TOOLS = {
             "required": ["wing", "room", "content"],
         },
         "handler": tool_add_drawer,
+    },
+    "mempalace_register_wing": {
+        "description": "Promote a provisional wing to canonical, or merge a near-duplicate name into an existing wing as an alias. Account-scoped to the server env.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "slug": {"type": "string", "description": "Canonical wing slug to create or target"},
+                "display": {"type": "string", "description": "Human-readable name (optional)"},
+                "description": {"type": "string", "description": "One-line description (optional)"},
+                "kind": {"type": "string", "description": "project | diary (default project)"},
+                "merge_alias": {"type": "string", "description": "A near-duplicate name to record as an alias of slug (optional)"},
+            },
+            "required": ["slug"],
+        },
+        "handler": tool_register_wing,
     },
     "mempalace_delete_drawer": {
         "description": "Delete a drawer by ID. Irreversible.",

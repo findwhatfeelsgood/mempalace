@@ -100,3 +100,19 @@ def test_fallback_paths_preserve_input_name():
     reg = wr.Registry(entries=[wr.WingEntry(slug="fwfg-deploy", kind="project", account="alan@fwfg.com")])
     r2 = wr.canonicalize_wing("my_new_proj", account="alan@fwfg.com", kind="project", registry=reg)
     assert r2.status == "provisional" and r2.slug == "my_new_proj"
+
+
+def test_tool_register_wing_persists(monkeypatch, tmp_path):
+    reg_path = tmp_path / "wing_registry.yaml"
+    monkeypatch.setenv("MEMPALACE_REGISTRY_PATH", str(reg_path))
+    monkeypatch.setenv("MEMPALACE_ACCOUNT", "alan@fwfg.com")
+    import importlib
+    import mempalace.config as config
+    import mempalace.mcp_server as srv
+    importlib.reload(config)
+    importlib.reload(srv)
+
+    out = srv.tool_register_wing(slug="brand-new-thing", display="Brand New", description="d")
+    assert out["success"] and out["slug"] == "brand-new-thing"
+    reloaded = wr.load_registry(reg_path)
+    assert any(e.slug == "brand-new-thing" for e in reloaded.entries)
