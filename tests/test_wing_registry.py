@@ -75,3 +75,18 @@ def test_canonicalize_agent_all_prefix_becomes_unknown():
     assert wr.canonicalize_agent("wing_") == "unknown"
     assert wr.canonicalize_agent("wing_wing_") == "unknown"
     assert wr.canonicalize_agent("WING_") == "unknown"
+
+
+def test_register_wing_creates_new(reg):
+    out = wr.register_wing(reg, slug="new-thing", account="alan@fwfg.com", kind="project",
+                           display="New Thing", description="d")
+    assert out.status == "canonical"
+    assert any(e.slug == "new-thing" for e in reg.entries)
+
+
+def test_register_wing_merge_adds_alias(reg):
+    out = wr.register_wing(reg, slug="fwfg-deploy", account="alan@fwfg.com", kind="project",
+                           merge_alias="fwfgdeploy")
+    assert out.status == "canonical" and out.slug == "fwfg-deploy"
+    entry = next(e for e in reg.entries if e.slug == "fwfg-deploy")
+    assert "fwfgdeploy" in entry.aliases

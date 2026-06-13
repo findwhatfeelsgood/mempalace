@@ -111,3 +111,22 @@ def canonicalize_wing(name: str, account: str | None, kind: str, registry: Regis
                 return CanonResult(slug=best_slug, status="canonical", matched=True)
 
     return CanonResult(slug=norm, status="provisional")
+
+
+def register_wing(registry: Registry, slug: str, account: str | None, kind: str = "project",
+                  display: str = "", description: str = "", merge_alias: str | None = None) -> CanonResult:
+    """Promote a wing to canonical, or merge `merge_alias` into an existing slug.
+    Mutates `registry` in place; caller persists with save_registry()."""
+    slug = normalize(slug)
+    existing = next((e for e in registry.entries
+                     if e.slug == slug and (e.account or None) == (account or None)
+                     and e.kind == kind), None)
+    if existing is None:
+        existing = WingEntry(slug=slug, display=display or slug, kind=kind,
+                             account=account, description=description, status="active")
+        registry.entries.append(existing)
+    if merge_alias:
+        alias = normalize(merge_alias)
+        if alias != existing.slug and alias not in existing.aliases:
+            existing.aliases.append(alias)
+    return CanonResult(slug=existing.slug, status="canonical", matched=True)
