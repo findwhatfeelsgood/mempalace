@@ -47,3 +47,20 @@ def mcp_server_params(*, account: str | None, model: str | None = None,
     if registry_path:
         env["MEMPALACE_REGISTRY_PATH"] = registry_path
     return {"command": sys.executable, "args": ["-m", "mempalace.mcp_server"], "env": env}
+
+
+BOOTSTRAP_INSTRUCTIONS = (
+    "You have persistent memory via the MemPalace MCP tools. "
+    "On startup, call mempalace_bootstrap once and follow its protocol and filing "
+    "rules exactly. Before answering about any past work, person, or decision, "
+    "search the palace (mempalace_search / mempalace_kg_query) — never guess. "
+    "File new memories into an existing wing from the bootstrap list; do not invent "
+    "near-duplicate wings. Provenance is set by the environment — never fabricate it."
+)
+
+
+def with_memory_instructions(base: str | None) -> str:
+    """Prepend the MemPalace bootstrap stub to an agent's instructions."""
+    if not base:
+        return BOOTSTRAP_INSTRUCTIONS
+    return f"{BOOTSTRAP_INSTRUCTIONS}\n\n{base}"

@@ -32,3 +32,18 @@ def test_mcp_server_params_omits_unset_optionals(monkeypatch):
     assert "MEMPALACE_MODEL" not in env
     assert "MEMPALACE_ACCOUNT" not in env
     assert "MEMPALACE_SESSION" not in env
+
+
+def test_with_memory_instructions_prepends_bootstrap():
+    base = "You are a helpful CFO assistant."
+    out = adapter.with_memory_instructions(base)
+    assert adapter.BOOTSTRAP_INSTRUCTIONS in out
+    assert base in out
+    assert out.startswith(adapter.BOOTSTRAP_INSTRUCTIONS)  # memory protocol first
+    # mentions the bootstrap tool by name so the model calls it
+    assert "mempalace_bootstrap" in adapter.BOOTSTRAP_INSTRUCTIONS
+
+
+def test_with_memory_instructions_handles_empty_base():
+    assert adapter.with_memory_instructions("") == adapter.BOOTSTRAP_INSTRUCTIONS
+    assert adapter.with_memory_instructions(None) == adapter.BOOTSTRAP_INSTRUCTIONS
