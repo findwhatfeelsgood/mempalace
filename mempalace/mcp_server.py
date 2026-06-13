@@ -32,6 +32,7 @@ from pathlib import Path
 
 from .config import MempalaceConfig, sanitize_name, sanitize_content
 from .version import __version__
+from . import wing_registry as _wr
 import chromadb
 from .query_sanitizer import sanitize_query
 from .searcher import search_memories
@@ -327,6 +328,41 @@ EXAMPLE:
 Read AAAK naturally — expand codes mentally, treat *markers* as emotional context.
 When WRITING AAAK: use entity codes, mark emotions, keep structure tight."""
 
+FILING_RULES = (
+    "Search before you write. File into an existing wing from the list below. "
+    "Propose a new wing only with create_wing=true on add_drawer (it will be flagged "
+    "provisional) or via mempalace_register_wing. Provenance (harness/model/account/"
+    "machine) is set by the environment — do not fabricate it."
+)
+
+
+def tool_bootstrap():
+    """One-call discovery payload for a fresh model: protocol, AAAK, account-scoped
+    wing lists, config warnings, and the server's provenance context."""
+    account = _config.account
+    reg = _wr.load_registry(_config.registry_path)
+    scoped = [e for e in reg.entries if (e.account or None) == (account or None)]
+    wings = [{"slug": e.slug, "kind": e.kind, "description": e.description}
+             for e in scoped if e.status == "active"]
+
+    warnings = []
+    if not account:
+        warnings.append("MEMPALACE_ACCOUNT is not set — writes will be unattributed to an account.")
+    if _config.harness == "unknown":
+        warnings.append("MEMPALACE_HARNESS is not set — harness will be recorded as 'unknown'.")
+    if not reg.entries:
+        warnings.append("Wing registry is empty or missing — wings will be stored as 'unverified'.")
+
+    return {
+        "protocol": PALACE_PROTOCOL,
+        "aaak_dialect": AAAK_SPEC,
+        "filing_rules": FILING_RULES,
+        "account": account,
+        "wings": wings,
+        "provenance": _config.provenance(),
+        "warnings": warnings,
+    }
+
 
 def tool_list_wings():
     col = _get_collection()
@@ -568,7 +604,8 @@ def tool_follow_tunnels(wing: str, room: str):
 
 
 def tool_add_drawer(
-    wing: str, room: str, content: str, source_file: str = None, added_by: str = "mcp"
+    wing: str, room: str, content: str, source_file: str = None,
+    added_by: str = "mcp", model: str = None
 ):
     """File verbatim content into a wing/room. Checks for duplicates first."""
     global _metadata_cache
@@ -578,6 +615,10 @@ def tool_add_drawer(
         content = sanitize_content(content)
     except ValueError as e:
         return {"success": False, "error": str(e)}
+
+    _reg = _wr.load_registry(_config.registry_path)
+    _canon = _wr.canonicalize_wing(wing, account=_config.account, kind="project", registry=_reg)
+    wing = _canon.slug
 
     col = _get_collection(create=True)
     if not col:
@@ -608,25 +649,46 @@ def tool_add_drawer(
         pass
 
     try:
+        meta = {
+            "wing": wing,
+            "room": room,
+            "source_file": source_file or "",
+            "chunk_index": 0,
+            "added_by": added_by,
+            "filed_at": datetime.now().isoformat(),
+            "wing_status": _canon.status,
+        }
+        prov = _config.provenance()
+        if model:
+            prov["model"] = model
+        meta.update(prov)
         col.upsert(
             ids=[drawer_id],
             documents=[content],
-            metadatas=[
-                {
-                    "wing": wing,
-                    "room": room,
-                    "source_file": source_file or "",
-                    "chunk_index": 0,
-                    "added_by": added_by,
-                    "filed_at": datetime.now().isoformat(),
-                }
-            ],
+            metadatas=[meta],
         )
         _metadata_cache = None
         logger.info(f"Filed drawer: {drawer_id} → {wing}/{room}")
         return {"success": True, "drawer_id": drawer_id, "wing": wing, "room": room}
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+def tool_register_wing(slug: str, display: str = "", description: str = "",
+                       kind: str = "project", merge_alias: str = None):
+    """Promote a provisional wing to canonical, or merge an alias into an existing slug.
+    Account comes from the server env (MEMPALACE_ACCOUNT)."""
+    try:
+        slug = sanitize_name(slug, "slug")
+        if merge_alias is not None:
+            merge_alias = sanitize_name(merge_alias, "merge_alias")
+    except ValueError as e:
+        return {"success": False, "error": str(e)}
+    reg = _wr.load_registry(_config.registry_path)
+    out = _wr.register_wing(reg, slug=slug, account=_config.account, kind=kind,
+                            display=display, description=description, merge_alias=merge_alias)
+    _wr.save_registry(reg, _config.registry_path)
+    return {"success": True, "slug": out.slug, "status": out.status}
 
 
 def tool_delete_drawer(drawer_id: str):
@@ -883,7 +945,7 @@ def tool_kg_stats():
 # ==================== AGENT DIARY ====================
 
 
-def tool_diary_write(agent_name: str, entry: str, topic: str = "general"):
+def tool_diary_write(agent_name: str, entry: str, topic: str = "general", model: str = None):
     """
     Write a diary entry for this agent. Each agent gets its own wing
     with a diary room. Entries are timestamped and accumulate over time.
@@ -897,7 +959,8 @@ def tool_diary_write(agent_name: str, entry: str, topic: str = "general"):
     except ValueError as e:
         return {"success": False, "error": str(e)}
 
-    wing = f"wing_{agent_name.lower().replace(' ', '_')}"
+    agent_slug = _wr.canonicalize_agent(agent_name)
+    wing = f"wing_{agent_slug}"
     room = "diary"
     col = _get_collection(create=True)
     if not col:
@@ -924,21 +987,25 @@ def tool_diary_write(agent_name: str, entry: str, topic: str = "general"):
         # semantic search quality. For now, store raw AAAK in metadata so it's
         # preserved, and keep the document as-is for embedding (even though
         # compressed AAAK degrades embedding quality).
+        meta = {
+            "wing": wing,
+            "room": room,
+            "hall": "hall_diary",
+            "topic": topic,
+            "type": "diary_entry",
+            "agent": agent_name,
+            "filed_at": now.isoformat(),
+            "date": now.strftime("%Y-%m-%d"),
+            "wing_status": "canonical",  # diary wings are deterministic per-agent, not registry-resolved
+        }
+        prov = _config.provenance()
+        if model:
+            prov["model"] = model
+        meta.update(prov)
         col.add(
             ids=[entry_id],
             documents=[entry],
-            metadatas=[
-                {
-                    "wing": wing,
-                    "room": room,
-                    "hall": "hall_diary",
-                    "topic": topic,
-                    "type": "diary_entry",
-                    "agent": agent_name,
-                    "filed_at": now.isoformat(),
-                    "date": now.strftime("%Y-%m-%d"),
-                }
-            ],
+            metadatas=[meta],
         )
         logger.info(f"Diary entry: {entry_id} → {wing}/diary/{topic}")
         return {
@@ -1107,6 +1174,11 @@ def tool_reconnect():
 # ==================== MCP PROTOCOL ====================
 
 TOOLS = {
+    "mempalace_bootstrap": {
+        "description": "Startup discovery: returns the MemPalace protocol, AAAK spec, account-scoped wing list, filing rules, config warnings, and this server's provenance context. Call once at session start and follow it.",
+        "input_schema": {"type": "object", "properties": {}},
+        "handler": tool_bootstrap,
+    },
     "mempalace_status": {
         "description": "Palace overview — total drawers, wing and room counts",
         "input_schema": {"type": "object", "properties": {}},
@@ -1373,10 +1445,26 @@ TOOLS = {
                 },
                 "source_file": {"type": "string", "description": "Where this came from (optional)"},
                 "added_by": {"type": "string", "description": "Who is filing this (default: mcp)"},
+                "model": {"type": "string", "description": "Override the model for this write (default: server env)"},
             },
             "required": ["wing", "room", "content"],
         },
         "handler": tool_add_drawer,
+    },
+    "mempalace_register_wing": {
+        "description": "Promote a provisional wing to canonical, or merge a near-duplicate name into an existing wing as an alias. Account-scoped to the server env.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "slug": {"type": "string", "description": "Canonical wing slug to create or target"},
+                "display": {"type": "string", "description": "Human-readable name (optional)"},
+                "description": {"type": "string", "description": "One-line description (optional)"},
+                "kind": {"type": "string", "description": "project | diary (default project)"},
+                "merge_alias": {"type": "string", "description": "A near-duplicate name to record as an alias of slug (optional)"},
+            },
+            "required": ["slug"],
+        },
+        "handler": tool_register_wing,
     },
     "mempalace_delete_drawer": {
         "description": "Delete a drawer by ID. Irreversible.",
@@ -1462,6 +1550,7 @@ TOOLS = {
                     "type": "string",
                     "description": "Topic tag (optional, default: general)",
                 },
+                "model": {"type": "string", "description": "Override the model for this entry (default: server env)"},
             },
             "required": ["agent_name", "entry"],
         },
