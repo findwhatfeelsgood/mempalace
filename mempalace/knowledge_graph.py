@@ -40,6 +40,7 @@ import json
 import os
 import sqlite3
 import threading
+import uuid
 from datetime import date, datetime
 from pathlib import Path
 
@@ -164,7 +165,7 @@ class KnowledgeGraph:
                 if existing:
                     return existing["id"]  # Already exists and still valid
 
-                triple_id = f"t_{sub_id}_{pred}_{obj_id}_{hashlib.sha256(f'{valid_from}{datetime.now().isoformat()}'.encode()).hexdigest()[:12]}"
+                triple_id = f"t_{sub_id}_{pred}_{obj_id}_{hashlib.sha256(f'{valid_from}{datetime.now().isoformat()}{uuid.uuid4()}'.encode()).hexdigest()[:12]}"
 
                 conn.execute(
                     """INSERT INTO triples (id, subject, predicate, object, valid_from, valid_to, confidence, source_closet, source_file)
