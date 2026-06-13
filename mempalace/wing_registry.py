@@ -72,10 +72,11 @@ class CanonResult:
 
 def canonicalize_agent(name: str) -> str:
     """Return a bare writer slug. Strips any number of leading 'wing-'/'wing_'
-    segments so the storage layer can add the 'wing_' prefix exactly once."""
+    segments (including a trailing bare 'wing') so the storage layer can add the
+    'wing_' prefix exactly once."""
     slug = normalize(name)
-    while slug.startswith("wing-"):
-        slug = slug[len("wing-"):]
+    while slug == "wing" or slug.startswith("wing-"):
+        slug = "" if slug == "wing" else slug[len("wing-"):]
     return slug or "unknown"
 
 

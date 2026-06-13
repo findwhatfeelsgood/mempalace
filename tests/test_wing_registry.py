@@ -69,3 +69,9 @@ def test_canonicalize_agent_strips_wing_prefix_and_normalizes():
     assert wr.canonicalize_agent("Claude Code") == "claude-code"
     assert wr.canonicalize_agent("wing_wing_claude-code") == "claude-code"
     assert wr.canonicalize_agent("openai-agents-sdk") == "openai-agents-sdk"
+
+
+def test_canonicalize_agent_all_prefix_becomes_unknown():
+    assert wr.canonicalize_agent("wing_") == "unknown"
+    assert wr.canonicalize_agent("wing_wing_") == "unknown"
+    assert wr.canonicalize_agent("WING_") == "unknown"
