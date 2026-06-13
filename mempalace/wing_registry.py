@@ -90,7 +90,7 @@ def canonicalize_wing(name: str, account: str | None, kind: str, registry: Regis
     """
     norm = normalize(name)
     if not registry.entries:
-        return CanonResult(slug=norm, status="unverified")
+        return CanonResult(slug=name, status="unverified")
 
     scoped = [e for e in registry.entries
               if e.kind == kind and (e.account or None) == (account or None)]
@@ -110,7 +110,7 @@ def canonicalize_wing(name: str, account: str | None, kind: str, registry: Regis
             if best_score >= FUZZY_THRESHOLD and (best_score - runner) >= FUZZY_MARGIN:
                 return CanonResult(slug=best_slug, status="canonical", matched=True)
 
-    return CanonResult(slug=norm, status="provisional")
+    return CanonResult(slug=name, status="provisional")
 
 
 def register_wing(registry: Registry, slug: str, account: str | None, kind: str = "project",

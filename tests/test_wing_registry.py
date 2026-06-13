@@ -90,3 +90,13 @@ def test_register_wing_merge_adds_alias(reg):
     assert out.status == "canonical" and out.slug == "fwfg-deploy"
     entry = next(e for e in reg.entries if e.slug == "fwfg-deploy")
     assert "fwfgdeploy" in entry.aliases
+
+
+def test_fallback_paths_preserve_input_name():
+    # empty registry -> unverified, name preserved (underscores NOT dashed)
+    r = wr.canonicalize_wing("test_wing", account=None, kind="project", registry=wr.Registry())
+    assert r.status == "unverified" and r.slug == "test_wing"
+    # registry present but no match -> provisional, name preserved
+    reg = wr.Registry(entries=[wr.WingEntry(slug="fwfg-deploy", kind="project", account="alan@fwfg.com")])
+    r2 = wr.canonicalize_wing("my_new_proj", account="alan@fwfg.com", kind="project", registry=reg)
+    assert r2.status == "provisional" and r2.slug == "my_new_proj"
