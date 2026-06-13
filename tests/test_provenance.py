@@ -45,3 +45,23 @@ def test_add_drawer_stamps_provenance(monkeypatch, tmp_path):
     assert meta["account"] == "alan@fwfg.com"
     assert meta["model"] == "gpt-4o"          # per-call override wins over (unset) env
     assert meta["machine"]
+
+
+def test_diary_write_stamps_provenance(monkeypatch, tmp_path):
+    monkeypatch.setenv("MEMPALACE_PALACE_PATH", str(tmp_path / "palace2"))
+    monkeypatch.setenv("MEMPALACE_HARNESS", "claude-code")
+    monkeypatch.setenv("MEMPALACE_MODEL", "claude-opus-4-8")
+    monkeypatch.setenv("MEMPALACE_ACCOUNT", "alan@fwfg.com")
+    import mempalace.config as config
+    import mempalace.mcp_server as srv
+    importlib.reload(config)
+    importlib.reload(srv)
+
+    res = srv.tool_diary_write(agent_name="claude-code", entry="SESSION:x|done|★")
+    assert res["success"]
+    got = srv._get_collection().get(ids=[res["entry_id"]], include=["metadatas"])
+    meta = got["metadatas"][0]
+    assert meta["type"] == "diary_entry"
+    assert meta["harness"] == "claude-code"
+    assert meta["model"] == "claude-opus-4-8"
+    assert meta["account"] == "alan@fwfg.com"

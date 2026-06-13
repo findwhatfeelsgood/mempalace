@@ -887,7 +887,7 @@ def tool_kg_stats():
 # ==================== AGENT DIARY ====================
 
 
-def tool_diary_write(agent_name: str, entry: str, topic: str = "general"):
+def tool_diary_write(agent_name: str, entry: str, topic: str = "general", model: str = None):
     """
     Write a diary entry for this agent. Each agent gets its own wing
     with a diary room. Entries are timestamped and accumulate over time.
@@ -928,21 +928,24 @@ def tool_diary_write(agent_name: str, entry: str, topic: str = "general"):
         # semantic search quality. For now, store raw AAAK in metadata so it's
         # preserved, and keep the document as-is for embedding (even though
         # compressed AAAK degrades embedding quality).
+        meta = {
+            "wing": wing,
+            "room": room,
+            "hall": "hall_diary",
+            "topic": topic,
+            "type": "diary_entry",
+            "agent": agent_name,
+            "filed_at": now.isoformat(),
+            "date": now.strftime("%Y-%m-%d"),
+        }
+        prov = _config.provenance()
+        if model:
+            prov["model"] = model
+        meta.update(prov)
         col.add(
             ids=[entry_id],
             documents=[entry],
-            metadatas=[
-                {
-                    "wing": wing,
-                    "room": room,
-                    "hall": "hall_diary",
-                    "topic": topic,
-                    "type": "diary_entry",
-                    "agent": agent_name,
-                    "filed_at": now.isoformat(),
-                    "date": now.strftime("%Y-%m-%d"),
-                }
-            ],
+            metadatas=[meta],
         )
         logger.info(f"Diary entry: {entry_id} → {wing}/diary/{topic}")
         return {
@@ -1467,6 +1470,7 @@ TOOLS = {
                     "type": "string",
                     "description": "Topic tag (optional, default: general)",
                 },
+                "model": {"type": "string", "description": "Override the model for this entry (default: server env)"},
             },
             "required": ["agent_name", "entry"],
         },
