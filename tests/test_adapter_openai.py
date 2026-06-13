@@ -1,4 +1,6 @@
 import sys
+
+import pytest
 from mempalace.adapters import openai as adapter
 
 
@@ -67,7 +69,6 @@ def test_save_cadence_due_and_reset():
 
 
 def test_save_cadence_rejects_bad_interval():
-    import pytest
     with pytest.raises(ValueError):
         adapter.SaveCadence(interval=0)
 
@@ -112,3 +113,40 @@ def test_saved_in_result_false_when_no_write_tool():
 def test_saved_in_result_handles_missing_attrs():
     assert adapter.saved_in_result(object()) is False
     assert adapter.saved_in_result(_FakeResult([])) is False
+
+
+def test_flush_due_runs_save_prompt_and_verifies():
+    calls = []
+
+    def fake_run(prompt):
+        calls.append(prompt)
+        return _FakeResult([_FakeItem("tool_call_item", "mempalace_diary_write")])
+
+    adapter.flush_due(fake_run)
+    assert len(calls) == 1
+    assert "save" in calls[0].lower() or "diary" in calls[0].lower()
+
+
+def test_flush_due_retries_once_then_raises():
+    calls = []
+
+    def never_saves(prompt):
+        calls.append(prompt)
+        return _FakeResult([_FakeItem("message_output_item")])
+
+    with pytest.raises(adapter.FlushError):
+        adapter.flush_due(never_saves)
+    assert len(calls) == 2  # initial + one retry
+
+
+def test_flush_due_second_attempt_succeeds():
+    state = {"n": 0}
+
+    def saves_on_retry(prompt):
+        state["n"] += 1
+        if state["n"] == 1:
+            return _FakeResult([])
+        return _FakeResult([_FakeItem("tool_call_item", "mempalace_add_drawer")])
+
+    adapter.flush_due(saves_on_retry)  # no raise
+    assert state["n"] == 2

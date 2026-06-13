@@ -109,3 +109,25 @@ def saved_in_result(run_result) -> bool:
         if name in WRITE_TOOLS:
             return True
     return False
+
+
+SAVE_PROMPT = (
+    "MemPalace checkpoint: save this session's key content now. Call "
+    "mempalace_diary_write with an AAAK-compressed summary, and mempalace_add_drawer "
+    "for any verbatim decisions/quotes/code. File into an existing wing. Then continue."
+)
+
+
+class FlushError(RuntimeError):
+    """Raised when a save flush ran but no MemPalace write tool was called."""
+
+
+def flush_due(run, *, max_attempts: int = 2) -> None:
+    """Drive a verified save. `run` is a callable taking a prompt string and
+    returning a run result (duck-typed for saved_in_result). Retries up to
+    max_attempts; raises FlushError if no write tool was called (fails visibly)."""
+    for _ in range(max_attempts):
+        result = run(SAVE_PROMPT)
+        if saved_in_result(result):
+            return
+    raise FlushError("save flush did not produce a MemPalace write tool call")
