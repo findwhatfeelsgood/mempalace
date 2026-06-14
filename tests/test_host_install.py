@@ -206,3 +206,25 @@ def test_repoint_codex_toml_does_not_add_account_when_absent(tmp_path):
     hi.repoint_codex_toml(p, VENV, "codex", dry_run=False)
     env = tomllib.load(open(p, "rb"))["mcp_servers"]["mempalace"].get("env", {})
     assert "MEMPALACE_ACCOUNT" not in env
+
+
+AGENTS_MARKER = "## MemPalace memory (required)"
+
+
+def test_ensure_agents_section_appends_when_absent(tmp_path):
+    p = tmp_path / "AGENTS.md"
+    p.write_text("# Tree\n\nsome rules\n", encoding="utf-8")
+    assert hi.ensure_agents_section(p, dry_run=False) is True
+    assert AGENTS_MARKER in p.read_text(encoding="utf-8")
+    assert "mempalace_bootstrap" in p.read_text(encoding="utf-8")
+
+
+def test_ensure_agents_section_idempotent(tmp_path):
+    p = tmp_path / "AGENTS.md"
+    p.write_text("# Tree\n", encoding="utf-8")
+    hi.ensure_agents_section(p, dry_run=False)
+    assert hi.ensure_agents_section(p, dry_run=False) is False
+
+
+def test_ensure_agents_section_missing_file_is_noop(tmp_path):
+    assert hi.ensure_agents_section(tmp_path / "absent.md", dry_run=False) is False

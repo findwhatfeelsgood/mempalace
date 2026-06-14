@@ -220,3 +220,38 @@ def repoint_codex_toml(path: Path, venv_python: str, harness: str, dry_run: bool
     backup_file(path)
     path.write_text(new_text, encoding="utf-8")
     return True
+
+
+AGENTS_SECTION = """
+## MemPalace memory (required)
+
+You have persistent memory via the **MemPalace MCP tools**. Provenance (harness,
+account, machine) is set by the environment / tree-map — never fabricate it.
+
+1. **On startup:** call `mempalace_bootstrap` once and follow its protocol + filing
+   rules. File into an existing wing from the list it returns; don't spawn
+   near-duplicates (use `mempalace_register_wing` for a genuinely new one).
+2. **Before answering** about any past person, project, decision, or event: call
+   `mempalace_search` or `mempalace_kg_query` first. Never guess — verify.
+3. **At session end** (or after a meaningful chunk of work): call
+   `mempalace_diary_write` (AAAK summary) + `mempalace_add_drawer` (verbatim
+   decisions/quotes/code).
+"""
+
+
+def ensure_agents_section(path: Path, dry_run: bool) -> bool:
+    """Append the MemPalace memory protocol to an existing AGENTS.md if absent.
+    Idempotent (keyed on the section header); backs up; returns changed. No-op if
+    the file does not exist (the installer never creates a tree's AGENTS.md)."""
+    path = Path(path)
+    if not path.is_file():
+        return False
+    text = path.read_text(encoding="utf-8")
+    if "## MemPalace memory (required)" in text:
+        return False
+    if dry_run:
+        return True
+    backup_file(path)
+    sep = "" if text.endswith("\n") else "\n"
+    path.write_text(text + sep + AGENTS_SECTION, encoding="utf-8")
+    return True
