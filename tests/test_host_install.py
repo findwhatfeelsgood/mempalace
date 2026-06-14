@@ -1,5 +1,7 @@
 # tests/test_host_install.py
 import json
+from pathlib import Path
+
 import yaml
 from mempalace import host_install as hi
 
@@ -292,3 +294,25 @@ def test_uninstall_stale_skips_venv(tmp_path):
     calls = []
     hi.uninstall_stale([venv], venv, yes=True, dry_run=False, _runner=lambda c: (calls.append(c), "")[1])
     assert calls == []     # the venv interpreter is never touched
+
+
+def test_run_install_refuses_pdev_target_from_dev_run(tmp_path, monkeypatch):
+    dev = tmp_path / "dev"
+    pdev = tmp_path / "pdev"
+    dev.mkdir()
+    pdev.mkdir()
+    (pdev / "AGENTS.md").write_text("# personal\n", encoding="utf-8")
+    # a dev run must not touch pdev's AGENTS.md
+    assert hi.within_tree(pdev / "AGENTS.md", dev, []) is False
+    # ensure run_install only ever calls ensure_agents_section on within-tree paths:
+    targeted = hi.agents_targets_for_tree(tree_root=dev, known_trees=[dev, pdev])
+    assert all(hi.within_tree(t, dev, []) for t in targeted)
+    assert (pdev / "AGENTS.md") not in [Path(t) for t in targeted]
+
+
+def test_main_default_run_does_not_strip(monkeypatch):
+    # argparse: default run has strip_account False
+    args = hi.parse_args(["--dry-run"])
+    assert args.strip_account is False and args.strip_all_account_overrides is False
+    args2 = hi.parse_args(["--strip-account"])
+    assert args2.strip_account is True

@@ -9,6 +9,7 @@ correct), honors dry_run (compute + report, write nothing).
 """
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import re
@@ -346,3 +347,101 @@ def ensure_agents_section(path: Path, dry_run: bool) -> bool:
     sep = "" if text.endswith("\n") else "\n"
     path.write_text(text + sep + AGENTS_SECTION, encoding="utf-8")
     return True
+
+
+GLOBAL_DIRS = [Path.home() / ".mempalace", Path.home() / ".codex", Path.home() / ".claude"]
+HOME_CLAUDE_JSON = Path.home() / ".claude.json"
+CLAUDE_SETTINGS = Path.home() / ".claude" / "settings.json"
+CODEX_CONFIG = Path.home() / ".codex" / "config.toml"
+CODEX_HOOKS = Path.home() / ".codex" / "hooks.json"
+DEFAULT_TREES = [
+    {"path": r"C:\dev", "account": "alan@fwfg.com"},
+    {"path": r"C:\pdev", "account": "ja.powell@gmail.com"},
+]
+
+
+def agents_targets_for_tree(tree_root: Path, known_trees: list[Path]) -> list[Path]:
+    """AGENTS.md paths the installer may write for THIS run = only the current
+    tree's. Other trees are out of bounds (printed as a follow-up by run_install)."""
+    return [Path(tree_root) / "AGENTS.md"]
+
+
+def parse_args(argv):
+    p = argparse.ArgumentParser(prog="mempalace.host_install")
+    p.add_argument("--tree-root", default=os.getcwd())
+    p.add_argument("--venv-python", default="")
+    p.add_argument("--tree", action="append", default=[], help="PATH=ACCOUNT (repeatable)")
+    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--yes", action="store_true")
+    p.add_argument("--strip-account", action="store_true")
+    p.add_argument("--strip-all-account-overrides", action="store_true")
+    return p.parse_args(argv)
+
+
+def _tree_entries(extra: list[str]) -> list[dict]:
+    entries = list(DEFAULT_TREES)
+    for spec in extra:
+        if "=" in spec:
+            path, acct = spec.split("=", 1)
+            entries.append({"path": path.strip(), "account": acct.strip()})
+    return entries
+
+
+def run_install(args) -> int:
+    tree_root = Path(args.tree_root)
+    trees_path = Path.home() / ".mempalace" / "trees.yaml"
+    print(f"== MemPalace host install (tree-root={tree_root}, dry_run={args.dry_run}) ==")
+    write_trees_yaml(trees_path, _tree_entries(args.tree), args.dry_run)         # global
+    repoint_json_mcp(tree_root / ".mcp.json", "mempalace", args.venv_python, "claude-code", args.dry_run)
+    repoint_json_mcp(HOME_CLAUDE_JSON, "mempalace", args.venv_python, "claude-code", args.dry_run)
+    repoint_hook_commands(CLAUDE_SETTINGS, args.venv_python, "claude-code", args.dry_run)
+    repoint_codex_toml(CODEX_CONFIG, args.venv_python, "codex", args.dry_run)
+    repoint_hook_commands(CODEX_HOOKS, args.venv_python, "codex", args.dry_run)
+    for agents in agents_targets_for_tree(tree_root, [Path(e["path"]) for e in DEFAULT_TREES]):
+        if within_tree(agents, tree_root, GLOBAL_DIRS):
+            ensure_agents_section(agents, args.dry_run)
+    # boundary follow-up: other known trees are NOT written here
+    for e in DEFAULT_TREES:
+        other = Path(e["path"])
+        if not within_tree(other, tree_root, GLOBAL_DIRS) and other.exists():
+            print(f"  NOTE: run `python -m mempalace.host_install` from {other} to configure its AGENTS.md")
+    stale = uninstall_stale(_discover_interpreters(args.venv_python), args.venv_python, args.yes, args.dry_run)
+    if stale:
+        print(f"  stale mempalace interpreters: {stale}")
+    print("  VERIFY-THEN-STRIP: open a session in this tree, run `mempalace doctor`,")
+    print("  confirm tree_account is correct, THEN run with --strip-account.")
+    return 0
+
+
+def run_strip(args) -> int:
+    scope = "all" if args.strip_all_account_overrides else "host"
+    host = [HOME_CLAUDE_JSON, CLAUDE_SETTINGS, CODEX_CONFIG, CODEX_HOOKS]
+    project = [Path(args.tree_root) / ".mcp.json"]
+    print(f"== strip account (scope={scope}, dry_run={args.dry_run}) ==")
+    removed = strip_account(host, project, scope, args.dry_run)
+    print(f"  {'would remove' if args.dry_run else 'removed'} MEMPALACE_ACCOUNT from: {removed or 'nothing'}")
+    return 0
+
+
+def _discover_interpreters(venv_python: str) -> list[str]:
+    found = []
+    found += _default_runner(["where", "python"]).splitlines()
+    found += parse_py_launcher(_default_runner(["py", "-0p"]))
+    seen, out = set(), []
+    for p in (x.strip() for x in found if x.strip()):
+        k = os.path.normcase(os.path.normpath(p))
+        if k not in seen:
+            seen.add(k)
+            out.append(p)
+    return out
+
+
+def main(argv=None):
+    args = parse_args(argv if argv is not None else __import__("sys").argv[1:])
+    if args.strip_account or args.strip_all_account_overrides:
+        return run_strip(args)
+    return run_install(args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
