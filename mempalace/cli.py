@@ -458,6 +458,50 @@ def cmd_compress(args):
         print("  (dry run -- nothing stored)")
 
 
+def doctor_report() -> dict:
+    """Diagnostic snapshot: which MemPalace is running, plus its config and
+    env-derived provenance. Read-only; touches no palace data."""
+    from pathlib import Path
+
+    from .version import __version__, FWFG_VERSION
+
+    cfg = MempalaceConfig()
+    try:
+        from .mcp_server import TOOLS
+
+        bootstrap = "mempalace_bootstrap" in TOOLS
+    except Exception:
+        bootstrap = None  # could not import the MCP layer
+    return {
+        "executable": sys.executable,
+        "package_path": str(Path(__file__).resolve().parent),
+        "version": FWFG_VERSION,
+        "base_version": __version__,
+        "palace_path": cfg.palace_path,
+        "registry_path": cfg.registry_path,
+        "provenance": {
+            "harness": cfg.harness,
+            "account": cfg.account,
+            "model": cfg.model,
+            "machine": cfg.machine,
+            "session": cfg.session,
+        },
+        "bootstrap_tool_available": bootstrap,
+    }
+
+
+def cmd_doctor(args):
+    """Print which MemPalace is running (path/version) + config + provenance.
+
+    Use this to tell the FWFG fork apart from a stale global install when a host
+    misbehaves. If `version` lacks `+fwfg` or `bootstrap_tool_available` is false,
+    the caller is running the wrong (old) package.
+    """
+    import json
+
+    print(json.dumps(doctor_report(), indent=2))
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="MemPalace — Give your AI a memory. No API key required.",
@@ -648,6 +692,11 @@ def main():
 
     sub.add_parser("status", help="Show what's been filed")
 
+    sub.add_parser(
+        "doctor",
+        help="Diagnose which MemPalace is running (path/version/provenance/config)",
+    )
+
     args = parser.parse_args()
 
     if not args.command:
@@ -684,6 +733,7 @@ def main():
         "status": cmd_status,
         "seed-registry": cmd_seed_registry,
         "backfill-provenance": cmd_backfill_provenance,
+        "doctor": cmd_doctor,
     }
     dispatch[args.command](args)
 
