@@ -59,6 +59,24 @@ def sanitize_content(value: str, max_length: int = 100_000) -> str:
     return value
 
 
+def match_tree(cwd: str, trees: list[dict]) -> tuple[str | None, str | None]:
+    """Longest-prefix, case-insensitive, path-boundary-aware match of `cwd`
+    against tree entries (each {"path","account"}). Returns (account, matched_path)
+    or (None, None). Malformed entries (missing path/account) are skipped."""
+    norm_cwd = os.path.normcase(os.path.normpath(cwd))
+    best = None  # (prefix_len, account, original_path)
+    for entry in trees:
+        path = entry.get("path")
+        account = entry.get("account")
+        if not path or not account:
+            continue
+        norm_p = os.path.normcase(os.path.normpath(path))
+        if norm_cwd == norm_p or norm_cwd.startswith(norm_p + os.sep):
+            if best is None or len(norm_p) > best[0]:
+                best = (len(norm_p), account, path)
+    return (best[1], best[2]) if best else (None, None)
+
+
 DEFAULT_PALACE_PATH = os.path.expanduser("~/.mempalace/palace")
 DEFAULT_COLLECTION_NAME = "mempalace_drawers"
 
@@ -205,7 +223,23 @@ class MempalaceConfig:
 
     @property
     def account(self):
-        return os.environ.get("MEMPALACE_ACCOUNT") or None
+        return self.resolve_account()[0]
+
+    def resolve_account(self) -> tuple[str | None, str, str | None]:
+        """(account, source, matched_tree). Precedence: MEMPALACE_ACCOUNT env wins;
+        else longest-prefix CWD tree-map match; else (None, 'none', None)."""
+        env = os.environ.get("MEMPALACE_ACCOUNT")
+        if env:
+            return env, "env", None
+        account, matched = match_tree(os.getcwd(), self.load_trees())
+        if account:
+            return account, "tree", matched
+        return None, "none", None
+
+    def tree_account_for_cwd(self) -> tuple[str | None, str | None]:
+        """What the current CWD resolves to via the tree-map, IGNORING any env
+        override. Lets `doctor` show tree-derivation before a pin is stripped."""
+        return match_tree(os.getcwd(), self.load_trees())
 
     @property
     def machine(self):
@@ -221,6 +255,27 @@ class MempalaceConfig:
         if env:
             return env
         return str(self._config_dir / "wing_registry.yaml")
+
+    @property
+    def trees_path(self):
+        env = os.environ.get("MEMPALACE_TREES_PATH")
+        if env:
+            return env
+        return str(self._config_dir / "trees.yaml")
+
+    def load_trees(self) -> list[dict]:
+        """Read the tree-map (list of {path, account}). Fail open: missing or
+        corrupt file -> []. Non-dict entries are dropped."""
+        import yaml
+
+        p = Path(self.trees_path)
+        if not p.is_file():
+            return []
+        try:
+            data = yaml.safe_load(p.read_text(encoding="utf-8")) or []
+        except Exception:
+            return []
+        return [e for e in data if isinstance(e, dict)]
 
     def provenance(self) -> dict:
         """Provenance metadata for a write. Omits keys with no value, because

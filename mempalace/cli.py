@@ -461,6 +461,7 @@ def cmd_compress(args):
 def doctor_report() -> dict:
     """Diagnostic snapshot: which MemPalace is running, plus its config and
     env-derived provenance. Read-only; touches no palace data."""
+    import os as _os
     from pathlib import Path
 
     from .version import __version__, FWFG_VERSION
@@ -472,6 +473,9 @@ def doctor_report() -> dict:
         bootstrap = "mempalace_bootstrap" in TOOLS
     except Exception:
         bootstrap = None  # could not import the MCP layer
+
+    acct, source, _matched = cfg.resolve_account()
+    tree_acct, tree_matched = cfg.tree_account_for_cwd()
     return {
         "executable": sys.executable,
         "package_path": str(Path(__file__).resolve().parent),
@@ -479,6 +483,11 @@ def doctor_report() -> dict:
         "base_version": __version__,
         "palace_path": cfg.palace_path,
         "registry_path": cfg.registry_path,
+        "cwd": _os.getcwd(),
+        "account_source": source,
+        "resolved_account": acct,
+        "matched_tree": tree_matched,
+        "tree_account": tree_acct,
         "provenance": {
             "harness": cfg.harness,
             "account": cfg.account,
