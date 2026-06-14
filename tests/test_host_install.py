@@ -1,4 +1,5 @@
 # tests/test_host_install.py
+import yaml
 from mempalace import host_install as hi
 
 
@@ -31,3 +32,37 @@ def test_within_tree_refuses_sibling_tree(tmp_path):
     pdev.mkdir()
     # a C:\dev run must NOT target a C:\pdev path
     assert hi.within_tree(pdev / "AGENTS.md", dev, []) is False
+
+
+def test_write_trees_yaml_safe_dump_roundtrips_windows_paths(tmp_path):
+    p = tmp_path / "trees.yaml"
+    entries = [
+        {"path": r"C:\dev", "account": "alan@fwfg.com"},
+        {"path": r"C:\pdev", "account": "ja.powell@gmail.com"},
+    ]
+    assert hi.write_trees_yaml(p, entries, dry_run=False) is True
+    loaded = yaml.safe_load(p.read_text(encoding="utf-8"))   # must parse cleanly
+    assert {e["path"] for e in loaded} == {r"C:\dev", r"C:\pdev"}
+    assert {e["account"] for e in loaded} == {"alan@fwfg.com", "ja.powell@gmail.com"}
+
+
+def test_write_trees_yaml_idempotent(tmp_path):
+    p = tmp_path / "trees.yaml"
+    entries = [{"path": r"C:\dev", "account": "alan@fwfg.com"}]
+    hi.write_trees_yaml(p, entries, dry_run=False)
+    assert hi.write_trees_yaml(p, entries, dry_run=False) is False   # no change
+
+
+def test_write_trees_yaml_merges_and_overrides(tmp_path):
+    p = tmp_path / "trees.yaml"
+    hi.write_trees_yaml(p, [{"path": r"C:\dev", "account": "old@x"}], dry_run=False)
+    hi.write_trees_yaml(p, [{"path": r"C:\dev", "account": "alan@fwfg.com"},
+                            {"path": r"C:\pdev", "account": "ja.powell@gmail.com"}], dry_run=False)
+    loaded = {e["path"]: e["account"] for e in yaml.safe_load(p.read_text(encoding="utf-8"))}
+    assert loaded == {r"C:\dev": "alan@fwfg.com", r"C:\pdev": "ja.powell@gmail.com"}
+
+
+def test_write_trees_yaml_dry_run_writes_nothing(tmp_path):
+    p = tmp_path / "trees.yaml"
+    assert hi.write_trees_yaml(p, [{"path": r"C:\dev", "account": "a@x"}], dry_run=True) is True
+    assert not p.exists()
