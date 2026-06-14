@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import re
 
+
+
 # Legacy `agent` string -> (harness, model). Order matters: most specific first.
 # Unknown -> (None, None); we never guess.
 _OPUS_47 = re.compile(r"opus[-.]?4[-.]?7|opus47")
@@ -31,3 +33,35 @@ def classify_agent(agent: str | None) -> tuple[str | None, str | None]:
     if a == "claude-code" or _CLAUDE_HARNESS.match(a):
         return ("claude-code", None)
     return (None, None)
+
+
+# Explicit account classification for historical wings. Unknowns are flagged
+# for review, never defaulted to work (spec §7).
+_PERSONAL_PATTERNS = (re.compile(r"^pdev($|[-_])"),)
+_WORK_PATTERNS = (
+    re.compile(r"^wing[-_]"),       # agent diaries (claude-*, opus-*) are work on this machine
+    re.compile(r"^fwfg([-_]|$)"),
+    re.compile(r"^dev$"),
+    re.compile(r"^apple([-_]|$)"),
+    re.compile(r"^gizmo"),
+    re.compile(r"^klaviyo"),
+    re.compile(r"^uscreen"),
+    re.compile(r"^inbox([-_]|$)"),
+    re.compile(r"^support([-_]|$)"),
+    re.compile(r"^mempalace([-_]|$)"),
+    re.compile(r"^md-file"),
+    re.compile(r"^filenamer"),
+    re.compile(r"^claude-skills"),
+    re.compile(r"^user-preferences$"),
+)
+
+
+def account_for_wing(wing: str) -> tuple[str | None, bool]:
+    """Return (account, needs_review). Personal -> ja.powell@gmail.com;
+    recognized work -> alan@fwfg.com; unrecognized -> (None, True) for review."""
+    w = (wing or "").strip().lower()
+    if any(p.search(w) for p in _PERSONAL_PATTERNS):
+        return ("ja.powell@gmail.com", False)
+    if any(p.search(w) for p in _WORK_PATTERNS):
+        return ("alan@fwfg.com", False)
+    return (None, True)

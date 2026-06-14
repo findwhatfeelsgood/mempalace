@@ -27,3 +27,20 @@ def test_classify_agent_unknown_stays_null():
     assert norm.classify_agent("") == (None, None)
     assert norm.classify_agent(None) == (None, None)
     assert norm.classify_agent("some-future-harness") == (None, None)
+
+
+def test_account_for_wing_personal():
+    assert norm.account_for_wing("pdev-foundation") == ("ja.powell@gmail.com", False)
+    assert norm.account_for_wing("pdev-anything") == ("ja.powell@gmail.com", False)
+
+
+def test_account_for_wing_work():
+    for w in ("fwfg-deploy", "fwfg-data-warehouse", "dev", "wing_claude-opus-4-8",
+              "apple-revenue-economics", "mempalace-bq", "inbox-triage"):
+        account, review = norm.account_for_wing(w)
+        assert account == "alan@fwfg.com" and review is False
+
+
+def test_account_for_wing_unknown_is_flagged_not_defaulted():
+    account, review = norm.account_for_wing("totally-unrecognized-thing")
+    assert account is None and review is True
