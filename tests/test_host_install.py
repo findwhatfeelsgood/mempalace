@@ -316,3 +316,19 @@ def test_main_default_run_does_not_strip(monkeypatch):
     assert args.strip_account is False and args.strip_all_account_overrides is False
     args2 = hi.parse_args(["--strip-account"])
     assert args2.strip_account is True
+
+
+def test_run_install_refuses_empty_or_missing_venv_python(tmp_path, monkeypatch):
+    import types
+    # point HOME-ish writes nowhere dangerous: we only assert it refuses + writes nothing
+    proj = tmp_path / ".mcp.json"
+    proj.write_text(json.dumps({"mcpServers": {"mempalace": {
+        "command": "OLD", "args": ["-m", "mempalace.mcp_server"]}}}), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    args = types.SimpleNamespace(
+        venv_python="", tree_root=str(tmp_path), tree=[], dry_run=False, yes=False,
+        strip_account=False, strip_all_account_overrides=False)
+    rc = hi.run_install(args)
+    assert rc == 1                                   # refused
+    # the project .mcp.json command was NOT corrupted to ""
+    assert json.loads(proj.read_text(encoding="utf-8"))["mcpServers"]["mempalace"]["command"] == "OLD"

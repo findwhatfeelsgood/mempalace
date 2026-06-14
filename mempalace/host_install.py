@@ -388,6 +388,9 @@ def _tree_entries(extra: list[str]) -> list[dict]:
 
 
 def run_install(args) -> int:
+    if not args.venv_python or not Path(args.venv_python).is_file():
+        print(f"ERROR: --venv-python must be an existing interpreter; got {args.venv_python!r}")
+        return 1
     tree_root = Path(args.tree_root)
     trees_path = Path.home() / ".mempalace" / "trees.yaml"
     print(f"== MemPalace host install (tree-root={tree_root}, dry_run={args.dry_run}) ==")
