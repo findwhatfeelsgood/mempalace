@@ -240,6 +240,27 @@ class MempalaceConfig:
             return env
         return str(self._config_dir / "wing_registry.yaml")
 
+    @property
+    def trees_path(self):
+        env = os.environ.get("MEMPALACE_TREES_PATH")
+        if env:
+            return env
+        return str(self._config_dir / "trees.yaml")
+
+    def load_trees(self) -> list[dict]:
+        """Read the tree-map (list of {path, account}). Fail open: missing or
+        corrupt file -> []. Non-dict entries are dropped."""
+        import yaml
+
+        p = Path(self.trees_path)
+        if not p.is_file():
+            return []
+        try:
+            data = yaml.safe_load(p.read_text(encoding="utf-8")) or []
+        except Exception:
+            return []
+        return [e for e in data if isinstance(e, dict)]
+
     def provenance(self) -> dict:
         """Provenance metadata for a write. Omits keys with no value, because
         ChromaDB metadata rejects None. harness/machine always present."""
