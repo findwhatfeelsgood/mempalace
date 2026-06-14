@@ -228,3 +228,35 @@ def test_ensure_agents_section_idempotent(tmp_path):
 
 def test_ensure_agents_section_missing_file_is_noop(tmp_path):
     assert hi.ensure_agents_section(tmp_path / "absent.md", dry_run=False) is False
+
+
+def test_strip_account_host_only_leaves_project(tmp_path):
+    host = tmp_path / "claude.json"
+    host.write_text(json.dumps({"mcpServers": {"mempalace": {"command": "p",
+        "env": {"MEMPALACE_HARNESS": "claude-code", "MEMPALACE_ACCOUNT": "alan@fwfg.com"}}}}), encoding="utf-8")
+    proj = tmp_path / ".mcp.json"
+    proj.write_text(json.dumps({"mcpServers": {"mempalace": {"command": "p",
+        "env": {"MEMPALACE_HARNESS": "claude-code", "MEMPALACE_ACCOUNT": "alan@fwfg.com"}}}}), encoding="utf-8")
+    removed = hi.strip_account(host_paths=[host], project_paths=[proj], scope="host", dry_run=False)
+    assert any("claude.json" in str(r) for r in removed)
+    assert "MEMPALACE_ACCOUNT" not in json.loads(host.read_text())["mcpServers"]["mempalace"]["env"]
+    # project-scoped pin preserved (the escape hatch)
+    assert "MEMPALACE_ACCOUNT" in json.loads(proj.read_text())["mcpServers"]["mempalace"]["env"]
+
+
+def test_strip_account_all_removes_project_too(tmp_path):
+    proj = tmp_path / ".mcp.json"
+    proj.write_text(json.dumps({"mcpServers": {"mempalace": {"command": "p",
+        "env": {"MEMPALACE_ACCOUNT": "alan@fwfg.com"}}}}), encoding="utf-8")
+    hi.strip_account(host_paths=[], project_paths=[proj], scope="all", dry_run=False)
+    assert "MEMPALACE_ACCOUNT" not in json.loads(proj.read_text())["mcpServers"]["mempalace"]["env"]
+
+
+def test_strip_account_idempotent_and_dry_run(tmp_path):
+    host = tmp_path / "claude.json"
+    host.write_text(json.dumps({"mcpServers": {"mempalace": {"command": "p",
+        "env": {"MEMPALACE_ACCOUNT": "a@x"}}}}), encoding="utf-8")
+    assert hi.strip_account([host], [], "host", dry_run=True)            # would remove
+    assert "MEMPALACE_ACCOUNT" in json.loads(host.read_text())["mcpServers"]["mempalace"]["env"]  # dry-run wrote nothing
+    hi.strip_account([host], [], "host", dry_run=False)
+    assert hi.strip_account([host], [], "host", dry_run=False) == []     # idempotent

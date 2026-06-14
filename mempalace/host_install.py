@@ -222,6 +222,58 @@ def repoint_codex_toml(path: Path, venv_python: str, harness: str, dry_run: bool
     return True
 
 
+def _strip_account_json(path: Path, dry_run: bool) -> bool:
+    if not path.is_file():
+        return False
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    found = False
+    for srv in (data.get("mcpServers") or {}).values():
+        env = srv.get("env") if isinstance(srv, dict) else None
+        if isinstance(env, dict) and "MEMPALACE_ACCOUNT" in env:
+            found = True
+            if not dry_run:
+                del env["MEMPALACE_ACCOUNT"]
+    if found and not dry_run:
+        backup_file(path)
+        path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    return found
+
+
+def _strip_account_toml(path: Path, dry_run: bool) -> bool:
+    if not path.is_file():
+        return False
+    text = path.read_text(encoding="utf-8")
+    lines = text.splitlines()
+    kept = [ln for ln in lines if ln.strip().split("=")[0].strip() != "MEMPALACE_ACCOUNT"]
+    if len(kept) == len(lines):
+        return False
+    if not dry_run:
+        backup_file(path)
+        path.write_text("\n".join(kept) + "\n", encoding="utf-8")
+    return True
+
+
+def strip_account(host_paths: list[Path], project_paths: list[Path], scope: str,
+                  dry_run: bool) -> list[str]:
+    """Remove MEMPALACE_ACCOUNT from host-level configs (always) and, when
+    scope=='all', from project-scoped configs too. JSON + TOML. Returns the list
+    of files changed (or that would change, when dry_run). DEC-G: default keeps
+    project/user overrides — the escape hatch for unreliable-CWD harnesses."""
+    targets = list(host_paths)
+    if scope == "all":
+        targets += list(project_paths)
+    removed: list[str] = []
+    for p in targets:
+        p = Path(p)
+        hit = _strip_account_toml(p, dry_run) if p.suffix == ".toml" else _strip_account_json(p, dry_run)
+        if hit:
+            removed.append(str(p))
+    return removed
+
+
 AGENTS_SECTION = """
 ## MemPalace memory (required)
 
