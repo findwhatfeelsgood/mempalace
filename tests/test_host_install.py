@@ -1,6 +1,9 @@
 # tests/test_host_install.py
+import json
 import yaml
 from mempalace import host_install as hi
+
+VENV = r"C:\dev\mempalace\.venv\Scripts\python.exe"
 
 
 def test_backup_file_copies_with_timestamp(tmp_path):
@@ -66,3 +69,47 @@ def test_write_trees_yaml_dry_run_writes_nothing(tmp_path):
     p = tmp_path / "trees.yaml"
     assert hi.write_trees_yaml(p, [{"path": r"C:\dev", "account": "a@x"}], dry_run=True) is True
     assert not p.exists()
+
+
+def _mcp_fixture(tmp_path):
+    p = tmp_path / ".mcp.json"
+    p.write_text(json.dumps({"mcpServers": {"mempalace": {
+        "command": r"C:\Users\x\AppData\Local\Programs\Python\Python312\python.exe",
+        "args": ["-m", "mempalace.mcp_server"]}}}), encoding="utf-8")
+    return p
+
+
+def test_repoint_json_mcp_sets_command_harness_no_account(tmp_path):
+    p = _mcp_fixture(tmp_path)
+    assert hi.repoint_json_mcp(p, "mempalace", VENV, "claude-code", dry_run=False) is True
+    s = json.loads(p.read_text(encoding="utf-8"))["mcpServers"]["mempalace"]
+    assert s["command"] == VENV
+    assert s["args"] == ["-m", "mempalace.mcp_server"]
+    assert s["env"]["MEMPALACE_HARNESS"] == "claude-code"
+    assert "MEMPALACE_ACCOUNT" not in s["env"]            # does NOT add when absent
+
+
+def test_repoint_json_mcp_preserves_existing_account(tmp_path):
+    p = tmp_path / ".mcp.json"
+    p.write_text(json.dumps({"mcpServers": {"mempalace": {
+        "command": "old.exe", "args": ["-m", "mempalace.mcp_server"],
+        "env": {"MEMPALACE_HARNESS": "claude-code",
+                "MEMPALACE_ACCOUNT": "alan@fwfg.com"}}}}), encoding="utf-8")
+    hi.repoint_json_mcp(p, "mempalace", VENV, "claude-code", dry_run=False)
+    env = json.loads(p.read_text(encoding="utf-8"))["mcpServers"]["mempalace"]["env"]
+    assert env["MEMPALACE_ACCOUNT"] == "alan@fwfg.com"    # pin PRESERVED until --strip-account
+    assert env["MEMPALACE_HARNESS"] == "claude-code"
+
+
+def test_repoint_json_mcp_idempotent_and_backs_up(tmp_path):
+    p = _mcp_fixture(tmp_path)
+    hi.repoint_json_mcp(p, "mempalace", VENV, "claude-code", dry_run=False)
+    assert any(".bak." in f.name for f in tmp_path.iterdir())   # backup made
+    assert hi.repoint_json_mcp(p, "mempalace", VENV, "claude-code", dry_run=False) is False
+
+
+def test_repoint_json_mcp_missing_server_or_file_is_noop(tmp_path):
+    assert hi.repoint_json_mcp(tmp_path / "absent.json", "mempalace", VENV, "claude-code", False) is False
+    p = tmp_path / "x.json"
+    p.write_text('{"mcpServers": {}}', encoding="utf-8")
+    assert hi.repoint_json_mcp(p, "mempalace", VENV, "claude-code", False) is False

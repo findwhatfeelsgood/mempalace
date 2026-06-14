@@ -9,6 +9,7 @@ correct), honors dry_run (compute + report, write nothing).
 """
 from __future__ import annotations
 
+import json
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -71,4 +72,38 @@ def write_trees_yaml(path: Path, entries: list[dict], dry_run: bool) -> bool:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(yaml.safe_dump(payload, sort_keys=False, allow_unicode=True),
                     encoding="utf-8")
+    return True
+
+
+def repoint_json_mcp(path: Path, server: str, venv_python: str, harness: str,
+                     dry_run: bool) -> bool:
+    """Point a JSON mcpServers[server] at the venv python + set HARNESS env.
+    PRESERVES any existing MEMPALACE_ACCOUNT and never adds one — account is
+    tree-derived; removal is strip_account's job (verify-before-strip). No-op if
+    file/server absent or already correct. Backs up before writing. Returns changed."""
+    path = Path(path)
+    if not path.is_file():
+        return False
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    srv = (data.get("mcpServers") or {}).get(server)
+    if not isinstance(srv, dict):
+        return False
+    desired_cmd = venv_python
+    desired_args = ["-m", "mempalace.mcp_server"]
+    env = dict(srv.get("env") or {})
+    changed = (srv.get("command") != desired_cmd or srv.get("args") != desired_args
+               or env.get("MEMPALACE_HARNESS") != harness)
+    if not changed:
+        return False
+    if dry_run:
+        return True
+    backup_file(path)
+    srv["command"] = desired_cmd
+    srv["args"] = desired_args
+    env["MEMPALACE_HARNESS"] = harness
+    srv["env"] = env
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
     return True
