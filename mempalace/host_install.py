@@ -10,6 +10,7 @@ correct), honors dry_run (compute + report, write nothing).
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -105,5 +106,52 @@ def repoint_json_mcp(path: Path, server: str, venv_python: str, harness: str,
     srv["args"] = desired_args
     env["MEMPALACE_HARNESS"] = harness
     srv["env"] = env
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    return True
+
+
+_HOOK_RE = re.compile(
+    r"^(?P<py>.+?)\s+-m\s+mempalace\s+hook\s+run\s+--hook\s+(?P<hook>\S+)\s+"
+    r"--harness\s+(?P<harness>\S+)\s*$"
+)
+
+
+def repoint_hook_commands(path: Path, venv_python: str, harness: str, dry_run: bool) -> bool:
+    """Rewrite any 'mempalace hook run' command in a hooks JSON to use the explicit
+    venv python (QUOTED, so paths with spaces like C:\\Program Files\\... work as a
+    single shell token) and the given harness. Leaves non-mempalace commands alone.
+    Idempotent; backs up; returns changed."""
+    path = Path(path)
+    if not path.is_file():
+        return False
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    changed = False
+
+    def fix(node):
+        nonlocal changed
+        if isinstance(node, dict):
+            cmd = node.get("command")
+            if isinstance(cmd, str):
+                m = _HOOK_RE.match(cmd.strip())
+                if m:
+                    new = f'"{venv_python}" -m mempalace hook run --hook {m["hook"]} --harness {harness}'
+                    if new != cmd:
+                        node["command"] = new
+                        changed = True
+            for v in node.values():
+                fix(v)
+        elif isinstance(node, list):
+            for v in node:
+                fix(v)
+
+    fix(data)
+    if not changed:
+        return False
+    if dry_run:
+        return True
+    backup_file(path)
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
     return True

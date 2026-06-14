@@ -113,3 +113,41 @@ def test_repoint_json_mcp_missing_server_or_file_is_noop(tmp_path):
     p = tmp_path / "x.json"
     p.write_text('{"mcpServers": {}}', encoding="utf-8")
     assert hi.repoint_json_mcp(p, "mempalace", VENV, "claude-code", False) is False
+
+
+def _hooks_fixture(tmp_path, harness_in_cmd):
+    p = tmp_path / "hooks.json"
+    cmd = f"python -m mempalace hook run --hook stop --harness {harness_in_cmd}"
+    p.write_text(json.dumps({"hooks": {"Stop": [{"hooks": [
+        {"type": "command", "command": cmd}]}]}}), encoding="utf-8")
+    return p
+
+
+def test_repoint_hooks_explicit_python_and_harness(tmp_path):
+    p = _hooks_fixture(tmp_path, "claude-code")          # codex file had wrong harness
+    assert hi.repoint_hook_commands(p, VENV, "codex", dry_run=False) is True
+    cmd = json.loads(p.read_text(encoding="utf-8"))["hooks"]["Stop"][0]["hooks"][0]["command"]
+    assert cmd == f'"{VENV}" -m mempalace hook run --hook stop --harness codex'
+
+
+def test_repoint_hooks_quotes_python_with_spaces(tmp_path):
+    p = _hooks_fixture(tmp_path, "claude-code")
+    spaced = r"C:\Program Files\mp\.venv\Scripts\python.exe"
+    assert hi.repoint_hook_commands(p, spaced, "claude-code", dry_run=False) is True
+    cmd = json.loads(p.read_text(encoding="utf-8"))["hooks"]["Stop"][0]["hooks"][0]["command"]
+    assert cmd == f'"{spaced}" -m mempalace hook run --hook stop --harness claude-code'
+    # idempotent even with the quoted, space-containing path
+    assert hi.repoint_hook_commands(p, spaced, "claude-code", dry_run=False) is False
+
+
+def test_repoint_hooks_idempotent(tmp_path):
+    p = _hooks_fixture(tmp_path, "claude-code")
+    hi.repoint_hook_commands(p, VENV, "claude-code", dry_run=False)
+    assert hi.repoint_hook_commands(p, VENV, "claude-code", dry_run=False) is False
+
+
+def test_repoint_hooks_ignores_non_mempalace_commands(tmp_path):
+    p = tmp_path / "h.json"
+    p.write_text(json.dumps({"hooks": {"SessionStart": [{"hooks": [
+        {"type": "command", "command": "powershell.exe -File x.ps1"}]}]}}), encoding="utf-8")
+    assert hi.repoint_hook_commands(p, VENV, "claude-code", dry_run=False) is False
