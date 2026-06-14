@@ -260,6 +260,41 @@ def cmd_repair(args):
     print(f"\n{'=' * 55}\n")
 
 
+def cmd_seed_registry(args):
+    """Seed wing_registry.yaml from the palace's existing wings."""
+    from .normalization import seed_registry_from_palace
+
+    cfg = MempalaceConfig()
+    palace = os.path.expanduser(args.palace) if args.palace else cfg.palace_path
+    registry_path = args.registry or cfg.registry_path
+    entries = seed_registry_from_palace(palace, registry_path=registry_path, dry_run=args.dry_run)
+    review = [e for e in entries if e.status == "review"]
+    print(f"  {len(entries)} wings; {len(review)} need account review.")
+    for e in review:
+        print(f"    REVIEW: {e.slug} (account unassigned)")
+    print("  DRY RUN — not written." if args.dry_run else f"  Wrote {registry_path}")
+
+
+def cmd_backfill_provenance(args):
+    """Backfill harness/model/account/machine onto existing drawers."""
+    from .normalization import backfill_provenance
+
+    cfg = MempalaceConfig()
+    palace = os.path.expanduser(args.palace) if args.palace else cfg.palace_path
+    registry_path = args.registry or cfg.registry_path
+    n = backfill_provenance(
+        palace,
+        registry_path=registry_path,
+        dry_run=args.dry_run,
+        backup=not args.no_backup,
+        rewrite=args.rewrite,
+    )
+    verb = "would change" if args.dry_run else "changed"
+    print(f"  Backfill {verb} {n} drawer(s).")
+    if args.dry_run:
+        print("  DRY RUN — re-run with --yes to apply (a backup is taken first).")
+
+
 def cmd_hook(args):
     """Run hook logic: reads JSON from stdin, outputs JSON to stdout."""
     from .hooks_cli import run_hook
@@ -558,6 +593,32 @@ def main():
     for instr_name in ["init", "search", "mine", "help", "status"]:
         instructions_sub.add_parser(instr_name, help=f"Output {instr_name} instructions")
 
+    # seed-registry
+    sp_seed = sub.add_parser("seed-registry", help="Seed wing_registry.yaml from existing wings")
+    sp_seed.add_argument("--palace", help="Palace path (default: configured)")
+    sp_seed.add_argument(
+        "--registry", help="Registry YAML path (default: ~/.mempalace/wing_registry.yaml)"
+    )
+    sp_seed.add_argument("--dry-run", action="store_true", help="Show without writing")
+
+    # backfill-provenance
+    sp_bf = sub.add_parser(
+        "backfill-provenance", help="Backfill provenance onto existing drawers"
+    )
+    sp_bf.add_argument("--palace", help="Palace path (default: configured)")
+    sp_bf.add_argument("--registry", help="Registry YAML path")
+    sp_bf.add_argument(
+        "--yes",
+        dest="dry_run",
+        action="store_false",
+        help="Apply changes (default is dry-run)",
+    )
+    sp_bf.add_argument("--no-backup", action="store_true", help="Skip the pre-write palace backup")
+    sp_bf.add_argument(
+        "--rewrite", action="store_true", help="Also rewrite wing to canonical slug"
+    )
+    sp_bf.set_defaults(dry_run=True)
+
     # repair
     sub.add_parser(
         "repair",
@@ -621,6 +682,8 @@ def main():
         "repair": cmd_repair,
         "migrate": cmd_migrate,
         "status": cmd_status,
+        "seed-registry": cmd_seed_registry,
+        "backfill-provenance": cmd_backfill_provenance,
     }
     dispatch[args.command](args)
 
