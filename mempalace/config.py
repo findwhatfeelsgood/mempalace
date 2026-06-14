@@ -59,6 +59,24 @@ def sanitize_content(value: str, max_length: int = 100_000) -> str:
     return value
 
 
+def match_tree(cwd: str, trees: list[dict]) -> tuple[str | None, str | None]:
+    """Longest-prefix, case-insensitive, path-boundary-aware match of `cwd`
+    against tree entries (each {"path","account"}). Returns (account, matched_path)
+    or (None, None). Malformed entries (missing path/account) are skipped."""
+    norm_cwd = os.path.normcase(os.path.normpath(cwd))
+    best = None  # (prefix_len, account, original_path)
+    for entry in trees:
+        path = entry.get("path")
+        account = entry.get("account")
+        if not path or not account:
+            continue
+        norm_p = os.path.normcase(os.path.normpath(path))
+        if norm_cwd == norm_p or norm_cwd.startswith(norm_p + os.sep):
+            if best is None or len(norm_p) > best[0]:
+                best = (len(norm_p), account, path)
+    return (best[1], best[2]) if best else (None, None)
+
+
 DEFAULT_PALACE_PATH = os.path.expanduser("~/.mempalace/palace")
 DEFAULT_COLLECTION_NAME = "mempalace_drawers"
 
