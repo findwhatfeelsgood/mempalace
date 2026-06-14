@@ -223,7 +223,23 @@ class MempalaceConfig:
 
     @property
     def account(self):
-        return os.environ.get("MEMPALACE_ACCOUNT") or None
+        return self.resolve_account()[0]
+
+    def resolve_account(self) -> tuple[str | None, str, str | None]:
+        """(account, source, matched_tree). Precedence: MEMPALACE_ACCOUNT env wins;
+        else longest-prefix CWD tree-map match; else (None, 'none', None)."""
+        env = os.environ.get("MEMPALACE_ACCOUNT")
+        if env:
+            return env, "env", None
+        account, matched = match_tree(os.getcwd(), self.load_trees())
+        if account:
+            return account, "tree", matched
+        return None, "none", None
+
+    def tree_account_for_cwd(self) -> tuple[str | None, str | None]:
+        """What the current CWD resolves to via the tree-map, IGNORING any env
+        override. Lets `doctor` show tree-derivation before a pin is stripped."""
+        return match_tree(os.getcwd(), self.load_trees())
 
     @property
     def machine(self):
