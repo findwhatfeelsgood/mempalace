@@ -151,3 +151,58 @@ def test_repoint_hooks_ignores_non_mempalace_commands(tmp_path):
     p.write_text(json.dumps({"hooks": {"SessionStart": [{"hooks": [
         {"type": "command", "command": "powershell.exe -File x.ps1"}]}]}}), encoding="utf-8")
     assert hi.repoint_hook_commands(p, VENV, "claude-code", dry_run=False) is False
+
+
+def _codex_fixture(tmp_path):
+    p = tmp_path / "config.toml"
+    p.write_text(
+        "model = 'gpt-5.5'\n\n"
+        "[mcp_servers.mempalace]\n"
+        "command = 'C:\\\\Users\\\\x\\\\python.exe'\n"
+        "args = [\"-m\", \"mempalace.mcp_server\"]\n\n"
+        "[mcp_servers.other]\n"
+        "command = 'node.exe'\n",
+        encoding="utf-8")
+    return p
+
+
+def test_repoint_codex_toml_sets_command_and_env(tmp_path):
+    import tomllib
+    p = _codex_fixture(tmp_path)
+    assert hi.repoint_codex_toml(p, VENV, "codex", dry_run=False) is True
+    c = tomllib.load(open(p, "rb"))
+    mp = c["mcp_servers"]["mempalace"]
+    assert mp["command"] == VENV
+    assert mp["env"]["MEMPALACE_HARNESS"] == "codex"
+    assert c["mcp_servers"]["other"]["command"] == "node.exe"   # untouched
+
+
+def test_repoint_codex_toml_idempotent(tmp_path):
+    p = _codex_fixture(tmp_path)
+    hi.repoint_codex_toml(p, VENV, "codex", dry_run=False)
+    assert hi.repoint_codex_toml(p, VENV, "codex", dry_run=False) is False
+
+
+def test_repoint_codex_toml_preserves_existing_account(tmp_path):
+    import tomllib
+    p = tmp_path / "config.toml"
+    p.write_text(
+        "[mcp_servers.mempalace]\n"
+        "command = 'old.exe'\n"
+        'args = ["-m", "mempalace.mcp_server"]\n\n'
+        "[mcp_servers.mempalace.env]\n"
+        'MEMPALACE_HARNESS = "claude-code"\n'
+        'MEMPALACE_ACCOUNT = "alan@fwfg.com"\n',
+        encoding="utf-8")
+    hi.repoint_codex_toml(p, VENV, "codex", dry_run=False)
+    env = tomllib.load(open(p, "rb"))["mcp_servers"]["mempalace"]["env"]
+    assert env["MEMPALACE_ACCOUNT"] == "alan@fwfg.com"   # PRESERVED until --strip-account
+    assert env["MEMPALACE_HARNESS"] == "codex"
+
+
+def test_repoint_codex_toml_does_not_add_account_when_absent(tmp_path):
+    import tomllib
+    p = _codex_fixture(tmp_path)   # fixture has no account
+    hi.repoint_codex_toml(p, VENV, "codex", dry_run=False)
+    env = tomllib.load(open(p, "rb"))["mcp_servers"]["mempalace"].get("env", {})
+    assert "MEMPALACE_ACCOUNT" not in env

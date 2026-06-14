@@ -155,3 +155,68 @@ def repoint_hook_commands(path: Path, venv_python: str, harness: str, dry_run: b
     backup_file(path)
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
     return True
+
+
+def repoint_codex_toml(path: Path, venv_python: str, harness: str, dry_run: bool) -> bool:
+    """Targeted edit of the [mcp_servers.mempalace] block in a Codex config.toml:
+    set command to the venv python and ensure an env table with MEMPALACE_HARNESS.
+    PRESERVES any existing MEMPALACE_ACCOUNT and never adds one (removal is
+    strip_account's job — verify-before-strip). Preserves comments/other tables.
+    Idempotent; backs up; returns changed. Verifies the result parses (tomllib)
+    before writing."""
+    import tomllib
+    path = Path(path)
+    if not path.is_file():
+        return False
+    text = path.read_text(encoding="utf-8")
+    try:
+        cur = tomllib.loads(text)
+    except Exception:
+        return False
+    mp = (cur.get("mcp_servers") or {}).get("mempalace")
+    if not isinstance(mp, dict):
+        return False
+    cmd_ok = mp.get("command") == venv_python
+    env_ok = (mp.get("env") or {}).get("MEMPALACE_HARNESS") == harness
+    if cmd_ok and env_ok:
+        return False
+    lines = text.splitlines()
+    out, i, n = [], 0, len(lines)
+    while i < n:
+        line = lines[i]
+        if line.strip() == "[mcp_servers.mempalace]":
+            out.append(line)
+            i += 1
+            # rewrite keys until the next table header or EOF
+            while i < n and not lines[i].lstrip().startswith("["):
+                stripped = lines[i].lstrip()
+                if stripped.startswith("command"):
+                    out.append(f"command = '{venv_python}'")   # single-quoted TOML literal (no escaping)
+                else:
+                    out.append(lines[i])
+                i += 1
+            # ensure an env table follows with the harness
+            out.append("")
+            out.append("[mcp_servers.mempalace.env]")
+            out.append(f'MEMPALACE_HARNESS = "{harness}"')
+            # skip an existing env table (we just rewrote it) to avoid duplication
+            if i < n and lines[i].strip() == "[mcp_servers.mempalace.env]":
+                i += 1
+                while i < n and not lines[i].lstrip().startswith("["):
+                    s = lines[i].lstrip()
+                    if s and not s.startswith("MEMPALACE_HARNESS") and not s.startswith("#"):
+                        out.append(lines[i])   # preserve other env keys
+                    i += 1
+            continue
+        out.append(line)
+        i += 1
+    new_text = "\n".join(out) + "\n"
+    try:
+        tomllib.loads(new_text)              # never write unparseable TOML
+    except Exception:
+        return False
+    if dry_run:
+        return True
+    backup_file(path)
+    path.write_text(new_text, encoding="utf-8")
+    return True
