@@ -7,6 +7,8 @@ documents are never modified; writes back up first and merge metadata.
 from __future__ import annotations
 
 import re
+import shutil
+from datetime import datetime
 from pathlib import Path
 
 from . import wing_registry as wr
@@ -118,3 +120,78 @@ def seed_registry_from_palace(palace_path: str, *, registry_path=None, dry_run: 
     if not dry_run:
         wr.save_registry(wr.Registry(entries=entries), registry_path)
     return entries
+
+
+def backfill_provenance(palace_path: str, *, registry_path=None, dry_run: bool = True,
+                        backup: bool = True, rewrite: bool = False, batch_size: int = 500) -> int:
+    """Add harness/model/account/machine (and wing_status) to existing drawers.
+
+    Additive + crash-safe: documents are never touched; existing metadata keys are
+    preserved (read-merge-write); a copytree backup is taken before the first write
+    unless backup=False. Idempotent. Returns the number of drawers changed (or that
+    WOULD change, when dry_run). rewrite=True also overwrites `wing` with its
+    canonical slug; default leaves the stored wing and relies on registry aliases.
+    """
+    import chromadb
+    palace_path = str(Path(palace_path).expanduser())
+    reg = wr.load_registry(registry_path)
+    wing_account = {e.slug: e.account for e in reg.entries}
+    for e in reg.entries:                                   # aliases also map to the account
+        for a in e.aliases:
+            wing_account.setdefault(wr.normalize(a), e.account)
+
+    client = chromadb.PersistentClient(path=palace_path)
+    col = client.get_collection("mempalace_drawers")
+    total = col.count()
+
+    pending_ids, pending_metas, changed = [], [], 0
+    offset = 0
+    backed_up = not backup
+    while offset < total:
+        batch = col.get(include=["metadatas"], limit=batch_size, offset=offset)
+        ids, metas = batch["ids"], (batch["metadatas"] or [])
+        if not ids:
+            break
+        for did, meta in zip(ids, metas):
+            meta = dict(meta or {})
+            new = _provenance_for(meta, wing_account, reg, rewrite)
+            updates = {k: v for k, v in new.items() if meta.get(k) != v}
+            if not updates:
+                continue
+            changed += 1
+            if not dry_run:
+                meta.update(updates)
+                pending_ids.append(did)
+                pending_metas.append(meta)
+        offset += len(ids)
+
+    if not dry_run and pending_ids:
+        if not backed_up:
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            shutil.copytree(palace_path, f"{palace_path}.pre-backfill.{ts}")
+            backed_up = True
+        for i in range(0, len(pending_ids), batch_size):
+            col.update(ids=pending_ids[i:i + batch_size], metadatas=pending_metas[i:i + batch_size])
+    del col, client
+    return changed
+
+
+def _provenance_for(meta: dict, wing_account: dict, reg, rewrite: bool) -> dict:
+    """Compute the provenance fields a drawer SHOULD have (without mutating meta)."""
+    harness, model = classify_agent(meta.get("agent"))
+    canon = wr.normalize(meta.get("wing", ""))
+    account = wing_account.get(canon)
+    out = {}
+    if harness:
+        out["harness"] = harness
+    if model:
+        out["model"] = model
+    if account:
+        out["account"] = account
+    synced = meta.get("_synced_from")
+    if synced:
+        out["machine"] = str(synced)
+    out["wing_status"] = "canonical" if canon in {e.slug for e in reg.entries} else "provisional"
+    if rewrite and canon and meta.get("wing") != canon:
+        out["wing"] = canon
+    return out
