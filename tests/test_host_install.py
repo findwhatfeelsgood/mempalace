@@ -260,3 +260,35 @@ def test_strip_account_idempotent_and_dry_run(tmp_path):
     assert "MEMPALACE_ACCOUNT" in json.loads(host.read_text())["mcpServers"]["mempalace"]["env"]  # dry-run wrote nothing
     hi.strip_account([host], [], "host", dry_run=False)
     assert hi.strip_account([host], [], "host", dry_run=False) == []     # idempotent
+
+
+def test_parse_py_launcher_extracts_paths():
+    text = (" -V:3.14 *        C:\\Users\\a\\pythoncore-3.14-64\\python.exe\n"
+            " -V:3.12          C:\\Users\\a\\Programs\\Python\\Python312\\python.exe\n")
+    paths = hi.parse_py_launcher(text)
+    assert r"C:\Users\a\pythoncore-3.14-64\python.exe" in paths
+    assert r"C:\Users\a\Programs\Python\Python312\python.exe" in paths
+
+
+def test_uninstall_stale_uses_exact_interpreter_never_bare(tmp_path):
+    calls = []
+    def fake_run(cmd):
+        calls.append(cmd)
+        # report mempalace present only for the first interpreter
+        return "Name: mempalace" if cmd[:2] == [r"C:\py1.exe", "-m"] and "show" in cmd else ""
+    removed = hi.uninstall_stale(
+        interpreters=[r"C:\py1.exe", r"C:\py2.exe"],
+        venv_python=r"C:\dev\mempalace\.venv\Scripts\python.exe",
+        yes=True, dry_run=False, _runner=fake_run)
+    # every command starts with an explicit interpreter path (has drive letter colon), never bare "python"/"pip"
+    assert all(":" in c[0] for c in calls)
+    assert r"C:\py1.exe" in removed and r"C:\py2.exe" not in removed
+    # the uninstall for py1 was issued by exact interpreter
+    assert [r"C:\py1.exe", "-m", "pip", "uninstall", "-y", "mempalace"] in calls
+
+
+def test_uninstall_stale_skips_venv(tmp_path):
+    venv = r"C:\dev\mempalace\.venv\Scripts\python.exe"
+    calls = []
+    hi.uninstall_stale([venv], venv, yes=True, dry_run=False, _runner=lambda c: (calls.append(c), "")[1])
+    assert calls == []     # the venv interpreter is never touched

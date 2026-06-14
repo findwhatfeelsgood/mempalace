@@ -10,8 +10,10 @@ correct), honors dry_run (compute + report, write nothing).
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
+import subprocess
 from datetime import datetime
 from pathlib import Path
 
@@ -220,6 +222,43 @@ def repoint_codex_toml(path: Path, venv_python: str, harness: str, dry_run: bool
     backup_file(path)
     path.write_text(new_text, encoding="utf-8")
     return True
+
+
+def parse_py_launcher(text: str) -> list[str]:
+    """Extract interpreter paths from `py -0p` output."""
+    paths = []
+    for line in text.splitlines():
+        idx = line.find(":\\")
+        if idx >= 1:
+            paths.append(line[idx - 1:].strip())
+    return paths
+
+
+def _default_runner(cmd: list[str]) -> str:
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=120).stdout
+    except Exception:
+        return ""
+
+
+def uninstall_stale(interpreters: list[str], venv_python: str, yes: bool, dry_run: bool,
+                    _runner=None) -> list[str]:
+    """For each interpreter (exact path) that is NOT the venv and HAS mempalace,
+    uninstall via that exact interpreter (`<py> -m pip uninstall -y mempalace`).
+    Never uses bare python/pip. Returns interpreters uninstalled (or would be)."""
+    if _runner is None:
+        _runner = _default_runner
+    removed = []
+    venv_n = os.path.normcase(os.path.normpath(venv_python))
+    for py in interpreters:
+        if os.path.normcase(os.path.normpath(py)) == venv_n:
+            continue
+        if "Name: mempalace" not in _runner([py, "-m", "pip", "show", "mempalace"]):
+            continue
+        removed.append(py)
+        if not dry_run and yes:
+            _runner([py, "-m", "pip", "uninstall", "-y", "mempalace"])
+    return removed
 
 
 def _strip_account_json(path: Path, dry_run: bool) -> bool:
