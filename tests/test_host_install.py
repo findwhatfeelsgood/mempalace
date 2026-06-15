@@ -332,3 +332,161 @@ def test_run_install_refuses_empty_or_missing_venv_python(tmp_path, monkeypatch)
     assert rc == 1                                   # refused
     # the project .mcp.json command was NOT corrupted to ""
     assert json.loads(proj.read_text(encoding="utf-8"))["mcpServers"]["mempalace"]["command"] == "OLD"
+
+
+# --- registering a MISSING server block (fresh-host onboarding gap) ---
+
+def test_ensure_json_mcp_creates_when_absent(tmp_path):
+    p = tmp_path / ".mcp.json"
+    p.write_text('{"mcpServers": {"other": {"command": "node.exe"}}}', encoding="utf-8")
+    assert hi.ensure_json_mcp_server(p, "mempalace", VENV, "claude-code", dry_run=False) is True
+    s = json.loads(p.read_text(encoding="utf-8"))["mcpServers"]["mempalace"]
+    assert s["command"] == VENV
+    assert s["args"] == ["-m", "mempalace.mcp_server"]
+    assert s["env"]["MEMPALACE_HARNESS"] == "claude-code"
+    assert "MEMPALACE_ACCOUNT" not in s["env"]            # tree-derived, never pinned on create
+    assert json.loads(p.read_text())["mcpServers"]["other"]["command"] == "node.exe"   # sibling kept
+
+
+def test_ensure_json_mcp_creates_mcpservers_key_when_missing(tmp_path):
+    p = tmp_path / ".mcp.json"
+    p.write_text('{"someOtherTopLevel": 1}', encoding="utf-8")
+    assert hi.ensure_json_mcp_server(p, "mempalace", VENV, "claude-code", dry_run=False) is True
+    d = json.loads(p.read_text(encoding="utf-8"))
+    assert d["mcpServers"]["mempalace"]["command"] == VENV
+    assert d["someOtherTopLevel"] == 1                    # unrelated top-level keys preserved
+
+
+def test_ensure_json_mcp_noop_when_present(tmp_path):
+    p = _mcp_fixture(tmp_path)                            # already has mempalace
+    assert hi.ensure_json_mcp_server(p, "mempalace", VENV, "claude-code", dry_run=False) is False
+
+
+def test_ensure_json_mcp_noop_when_file_absent(tmp_path):
+    assert hi.ensure_json_mcp_server(tmp_path / "absent.json", "mempalace", VENV, "claude-code", False) is False
+
+
+def test_ensure_json_mcp_dry_run_writes_nothing(tmp_path):
+    p = tmp_path / ".mcp.json"
+    p.write_text('{"mcpServers": {}}', encoding="utf-8")
+    assert hi.ensure_json_mcp_server(p, "mempalace", VENV, "claude-code", dry_run=True) is True
+    assert json.loads(p.read_text(encoding="utf-8")) == {"mcpServers": {}}    # untouched
+
+
+def test_ensure_json_mcp_backs_up_and_idempotent(tmp_path):
+    p = tmp_path / ".mcp.json"
+    p.write_text('{"mcpServers": {}}', encoding="utf-8")
+    hi.ensure_json_mcp_server(p, "mempalace", VENV, "claude-code", dry_run=False)
+    assert any(".bak." in f.name for f in tmp_path.iterdir())
+    assert hi.ensure_json_mcp_server(p, "mempalace", VENV, "claude-code", dry_run=False) is False
+
+
+def test_ensure_json_mcp_refuses_malformed_mcpservers(tmp_path):
+    p = tmp_path / ".mcp.json"
+    p.write_text('{"mcpServers": [1, 2, 3]}', encoding="utf-8")       # wrong type
+    assert hi.ensure_json_mcp_server(p, "mempalace", VENV, "claude-code", dry_run=False) is False
+    assert json.loads(p.read_text(encoding="utf-8")) == {"mcpServers": [1, 2, 3]}   # never clobbered
+
+
+def test_ensure_then_repoint_json_is_stable(tmp_path):
+    p = tmp_path / ".mcp.json"
+    p.write_text('{"mcpServers": {}}', encoding="utf-8")
+    hi.ensure_json_mcp_server(p, "mempalace", VENV, "claude-code", dry_run=False)
+    # the freshly-created block is already correct, so repoint must no-op
+    assert hi.repoint_json_mcp(p, "mempalace", VENV, "claude-code", dry_run=False) is False
+
+
+def test_ensure_codex_creates_block_when_absent(tmp_path):
+    import tomllib
+    p = tmp_path / "config.toml"
+    p.write_text("model = 'gpt-5.5'\n\n[mcp_servers.node_repl]\ncommand = 'node.exe'\n", encoding="utf-8")
+    assert hi.ensure_codex_mempalace_server(p, VENV, "codex", dry_run=False) is True
+    c = tomllib.load(open(p, "rb"))
+    mp = c["mcp_servers"]["mempalace"]
+    assert mp["command"] == VENV
+    assert mp["args"] == ["-m", "mempalace.mcp_server"]
+    assert mp["env"]["MEMPALACE_HARNESS"] == "codex"
+    assert "MEMPALACE_ACCOUNT" not in mp.get("env", {})
+    assert c["mcp_servers"]["node_repl"]["command"] == "node.exe"   # sibling server preserved
+    assert c["model"] == "gpt-5.5"                                  # top-level preserved
+
+
+def test_ensure_codex_noop_when_present(tmp_path):
+    p = _codex_fixture(tmp_path)                          # already has mempalace
+    assert hi.ensure_codex_mempalace_server(p, VENV, "codex", dry_run=False) is False
+
+
+def test_ensure_codex_noop_when_file_absent(tmp_path):
+    assert hi.ensure_codex_mempalace_server(tmp_path / "absent.toml", VENV, "codex", False) is False
+
+
+def test_ensure_codex_dry_run_writes_nothing(tmp_path):
+    p = tmp_path / "config.toml"
+    p.write_text("[mcp_servers.node_repl]\ncommand = 'node.exe'\n", encoding="utf-8")
+    before = p.read_text(encoding="utf-8")
+    assert hi.ensure_codex_mempalace_server(p, VENV, "codex", dry_run=True) is True
+    assert p.read_text(encoding="utf-8") == before
+
+
+def test_ensure_codex_backs_up_idempotent_then_repoint_stable(tmp_path):
+    p = tmp_path / "config.toml"
+    p.write_text("[mcp_servers.node_repl]\ncommand = 'node.exe'\n", encoding="utf-8")
+    hi.ensure_codex_mempalace_server(p, VENV, "codex", dry_run=False)
+    assert any(".bak." in f.name for f in tmp_path.iterdir())
+    assert hi.ensure_codex_mempalace_server(p, VENV, "codex", dry_run=False) is False
+    # repoint sees the freshly-created block as already correct
+    assert hi.repoint_codex_toml(p, VENV, "codex", dry_run=False) is False
+
+
+def _run_install_args(venv_python, tree_root):
+    import types
+    return types.SimpleNamespace(
+        venv_python=venv_python, tree_root=str(tree_root), tree=[],
+        dry_run=False, yes=False, strip_account=False, strip_all_account_overrides=False)
+
+
+def _stub_home(tmp_path, monkeypatch):
+    """Point Path.home() and the module HOME-rooted config constants into tmp,
+    and neuter interpreter discovery (no subprocess). Returns the fake home dir."""
+    home = tmp_path / "home"
+    (home / ".mempalace").mkdir(parents=True)
+    (home / ".codex").mkdir(parents=True)
+    monkeypatch.setattr(hi.Path, "home", lambda: home)
+    monkeypatch.setattr(hi, "CODEX_CONFIG", home / ".codex" / "config.toml")
+    monkeypatch.setattr(hi, "CODEX_HOOKS", home / ".codex" / "hooks.json")
+    monkeypatch.setattr(hi, "HOME_CLAUDE_JSON", home / ".claude.json")
+    monkeypatch.setattr(hi, "CLAUDE_SETTINGS", home / ".claude" / "settings.json")
+    monkeypatch.setattr(hi, "_discover_interpreters", lambda venv: [])
+    return home
+
+
+def test_run_install_registers_missing_codex_block(tmp_path, monkeypatch):
+    # regression for the home-desktop gap: config.toml has another server but no mempalace
+    import tomllib
+    home = _stub_home(tmp_path, monkeypatch)
+    (home / ".codex" / "config.toml").write_text(
+        "[mcp_servers.node_repl]\ncommand = 'node.exe'\n", encoding="utf-8")
+    venvpy = tmp_path / "python.exe"
+    venvpy.write_text("", encoding="utf-8")
+    dev = tmp_path / "dev"
+    dev.mkdir()
+    assert hi.run_install(_run_install_args(str(venvpy), dev)) == 0
+    c = tomllib.load(open(home / ".codex" / "config.toml", "rb"))
+    assert c["mcp_servers"]["mempalace"]["command"] == str(venvpy)
+    assert c["mcp_servers"]["mempalace"]["env"]["MEMPALACE_HARNESS"] == "codex"
+    assert c["mcp_servers"]["node_repl"]["command"] == "node.exe"   # sibling untouched
+
+
+def test_run_install_warns_when_codex_hooks_wired_but_no_config(tmp_path, monkeypatch, capsys):
+    home = _stub_home(tmp_path, monkeypatch)
+    (home / ".codex" / "hooks.json").write_text(json.dumps({"hooks": {"Stop": [{"hooks": [
+        {"type": "command",
+         "command": '"x.exe" -m mempalace hook run --hook stop --harness codex'}]}]}}), encoding="utf-8")
+    # NOTE: no config.toml created -> ensure_* can't register, so run_install must WARN
+    venvpy = tmp_path / "python.exe"
+    venvpy.write_text("", encoding="utf-8")
+    dev = tmp_path / "dev"
+    dev.mkdir()
+    hi.run_install(_run_install_args(str(venvpy), dev))
+    out = capsys.readouterr().out
+    assert "WARNING" in out and "config.toml" in out
