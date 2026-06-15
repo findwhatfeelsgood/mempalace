@@ -387,6 +387,134 @@ def _tree_entries(extra: list[str]) -> list[dict]:
     return entries
 
 
+def ensure_json_mcp_server(path: Path, server: str, venv_python: str, harness: str,
+                           dry_run: bool) -> bool:
+    """Register mcpServers[server] in a JSON config that EXISTS but lacks the entry.
+    The installer otherwise only REPOINTS an already-registered server; on a
+    never-onboarded host that block is absent and repoint_json_mcp silently no-ops,
+    leaving hooks wired but no server to call. Creates the entry in the shape
+    repoint_json_mcp expects (venv command, mempalace.mcp_server args, env with
+    MEMPALACE_HARNESS, NO account — account is tree-derived). No-op if the file is
+    absent or the server already present (repoint handles that). Never clobbers a
+    malformed mcpServers. Backs up; honors dry_run; returns changed."""
+    path = Path(path)
+    if not path.is_file():
+        return False
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    if not isinstance(data, dict):
+        return False
+    servers = data.get("mcpServers")
+    if servers is not None and not isinstance(servers, dict):
+        return False                                  # malformed — never clobber
+    if isinstance(servers, dict) and isinstance(servers.get(server), dict):
+        return False                                  # already registered
+    if dry_run:
+        return True
+    if not isinstance(servers, dict):
+        servers = {}
+        data["mcpServers"] = servers
+    servers[server] = {
+        "command": venv_python,
+        "args": ["-m", "mempalace.mcp_server"],
+        "env": {"MEMPALACE_HARNESS": harness},
+    }
+    backup_file(path)
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    return True
+
+
+def ensure_codex_mempalace_server(path: Path, venv_python: str, harness: str,
+                                  dry_run: bool) -> bool:
+    """Append a [mcp_servers.mempalace] block to a Codex config.toml that EXISTS but
+    lacks it — the Codex counterpart to ensure_json_mcp_server. repoint_codex_toml
+    no-ops on an absent block, so a fresh host ends up with mempalace hooks wired and
+    no server registered. Shape mirrors repoint_codex_toml's contract (venv command
+    as a single-quoted TOML literal, mempalace.mcp_server args, an env table with
+    MEMPALACE_HARNESS, NO account). No-op if the file is absent or the block present.
+    Verifies the result parses (tomllib) before writing; backs up; honors dry_run."""
+    import tomllib
+    path = Path(path)
+    if not path.is_file():
+        return False
+    text = path.read_text(encoding="utf-8")
+    try:
+        cur = tomllib.loads(text)
+    except Exception:
+        return False
+    if isinstance((cur.get("mcp_servers") or {}).get("mempalace"), dict):
+        return False                                  # already present — repoint handles it
+    block = (
+        "[mcp_servers.mempalace]\n"
+        f"command = '{venv_python}'\n"               # single-quoted TOML literal (no escaping)
+        'args = ["-m", "mempalace.mcp_server"]\n\n'
+        "[mcp_servers.mempalace.env]\n"
+        f'MEMPALACE_HARNESS = "{harness}"\n'
+    )
+    sep = "" if text.endswith("\n") else "\n"
+    new_text = text + sep + "\n" + block
+    try:
+        tomllib.loads(new_text)                       # never write unparseable TOML
+    except Exception:
+        return False
+    if dry_run:
+        return True
+    backup_file(path)
+    path.write_text(new_text, encoding="utf-8")
+    return True
+
+
+def _hooks_reference_mempalace(path: Path) -> bool:
+    path = Path(path)
+    if not path.is_file():
+        return False
+    try:
+        return "mempalace hook run" in path.read_text(encoding="utf-8")
+    except Exception:
+        return False
+
+
+def _json_has_mempalace_server(path: Path) -> bool:
+    path = Path(path)
+    if not path.is_file():
+        return False
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    return isinstance(data, dict) and isinstance((data.get("mcpServers") or {}).get("mempalace"), dict)
+
+
+def _toml_has_mempalace_server(path: Path) -> bool:
+    import tomllib
+    path = Path(path)
+    if not path.is_file():
+        return False
+    try:
+        cur = tomllib.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    return isinstance((cur.get("mcp_servers") or {}).get("mempalace"), dict)
+
+
+def _warn_half_configured(tree_root: Path) -> None:
+    """Loud guard for the case ensure_* can't fix: a harness whose hooks call
+    mempalace but with no server block registered (e.g. the config file doesn't
+    exist yet) will fire auto-save with no MCP tools to call. Warn, don't hide it."""
+    if _hooks_reference_mempalace(CODEX_HOOKS) and not _toml_has_mempalace_server(CODEX_CONFIG):
+        print(f"  WARNING: {CODEX_HOOKS} runs mempalace hooks but {CODEX_CONFIG} has no "
+              f"[mcp_servers.mempalace] block — Codex auto-save will fire with no MCP server "
+              f"to call. Create/register the Codex config, then re-run.")
+    claude_ok = (_json_has_mempalace_server(HOME_CLAUDE_JSON)
+                 or _json_has_mempalace_server(Path(tree_root) / ".mcp.json"))
+    if _hooks_reference_mempalace(CLAUDE_SETTINGS) and not claude_ok:
+        print(f"  WARNING: {CLAUDE_SETTINGS} runs mempalace hooks but no mcpServers.mempalace "
+              f"in {HOME_CLAUDE_JSON} or {Path(tree_root) / '.mcp.json'} — Claude auto-save will "
+              f"fire with no MCP server to call.")
+
+
 def run_install(args) -> int:
     if not args.venv_python or not Path(args.venv_python).is_file():
         print(f"ERROR: --venv-python must be an existing interpreter; got {args.venv_python!r}")
@@ -395,9 +523,13 @@ def run_install(args) -> int:
     trees_path = Path.home() / ".mempalace" / "trees.yaml"
     print(f"== MemPalace host install (tree-root={tree_root}, dry_run={args.dry_run}) ==")
     write_trees_yaml(trees_path, _tree_entries(args.tree), args.dry_run)         # global
-    repoint_json_mcp(tree_root / ".mcp.json", "mempalace", args.venv_python, "claude-code", args.dry_run)
+    proj_mcp = tree_root / ".mcp.json"
+    ensure_json_mcp_server(proj_mcp, "mempalace", args.venv_python, "claude-code", args.dry_run)
+    repoint_json_mcp(proj_mcp, "mempalace", args.venv_python, "claude-code", args.dry_run)
+    ensure_json_mcp_server(HOME_CLAUDE_JSON, "mempalace", args.venv_python, "claude-code", args.dry_run)
     repoint_json_mcp(HOME_CLAUDE_JSON, "mempalace", args.venv_python, "claude-code", args.dry_run)
     repoint_hook_commands(CLAUDE_SETTINGS, args.venv_python, "claude-code", args.dry_run)
+    ensure_codex_mempalace_server(CODEX_CONFIG, args.venv_python, "codex", args.dry_run)
     repoint_codex_toml(CODEX_CONFIG, args.venv_python, "codex", args.dry_run)
     repoint_hook_commands(CODEX_HOOKS, args.venv_python, "codex", args.dry_run)
     for agents in agents_targets_for_tree(tree_root, [Path(e["path"]) for e in DEFAULT_TREES]):
@@ -411,6 +543,7 @@ def run_install(args) -> int:
     stale = uninstall_stale(_discover_interpreters(args.venv_python), args.venv_python, args.yes, args.dry_run)
     if stale:
         print(f"  stale mempalace interpreters: {stale}")
+    _warn_half_configured(tree_root)
     print("  VERIFY-THEN-STRIP: open a session in this tree, run `mempalace doctor`,")
     print("  confirm tree_account is correct, THEN run with --strip-account.")
     return 0
