@@ -160,6 +160,39 @@ def test_repoint_hooks_idempotent(tmp_path):
     assert hi.repoint_hook_commands(p, VENV, "claude-code", dry_run=False) is False
 
 
+def _ps_hooks_fixture(tmp_path, command):
+    p = tmp_path / "settings.json"
+    p.write_text(json.dumps({"hooks": {"Stop": [{"hooks": [
+        {"type": "command", "command": command}]}]}}), encoding="utf-8")
+    return p
+
+
+def test_harden_powershell_hooks_hides_outer_and_start_process(tmp_path):
+    cmd = ("powershell.exe -NoProfile -Command \"Start-Process -FilePath "
+           "'C:\\mp\\pythonw.exe' -ArgumentList 'sync.py','--push-only'\"")
+    p = _ps_hooks_fixture(tmp_path, cmd)
+    assert hi.harden_powershell_hooks(p, dry_run=False) is True
+    out = json.loads(p.read_text(encoding="utf-8"))["hooks"]["Stop"][0]["hooks"][0]["command"]
+    assert "-NoProfile -WindowStyle Hidden -Command" in out   # outer windowless
+    assert "Start-Process -WindowStyle Hidden" in out         # inner windowless
+    # idempotent
+    assert hi.harden_powershell_hooks(p, dry_run=False) is False
+
+
+def test_harden_powershell_hooks_file_launcher(tmp_path):
+    cmd = "powershell.exe -NoProfile -File C:\\skills\\session-start.ps1"
+    p = _ps_hooks_fixture(tmp_path, cmd)
+    assert hi.harden_powershell_hooks(p, dry_run=False) is True
+    out = json.loads(p.read_text(encoding="utf-8"))["hooks"]["Stop"][0]["hooks"][0]["command"]
+    assert out == "powershell.exe -NoProfile -WindowStyle Hidden -File C:\\skills\\session-start.ps1"
+
+
+def test_harden_powershell_hooks_ignores_non_powershell(tmp_path):
+    cmd = f'"{VENVW}" -m mempalace hook run --hook stop --harness claude-code'
+    p = _ps_hooks_fixture(tmp_path, cmd)
+    assert hi.harden_powershell_hooks(p, dry_run=False) is False
+
+
 def test_repoint_hooks_ignores_non_mempalace_commands(tmp_path):
     p = tmp_path / "h.json"
     p.write_text(json.dumps({"hooks": {"SessionStart": [{"hooks": [
