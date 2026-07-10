@@ -174,6 +174,73 @@ def repoint_hook_commands(path: Path, venv_python: str, harness: str, dry_run: b
     return True
 
 
+def _inject_windowstyle_hidden(cmd: str) -> str:
+    """Return `cmd` with `-WindowStyle Hidden` added to the outer powershell
+    invocation and to any inner `Start-Process`, where missing.
+
+    powershell.exe is a console binary; when a hook fires it (many times per
+    session) it flashes a console window that steals keyboard focus. `-WindowStyle
+    Hidden` launches it windowless. Case-insensitive; idempotent (a token already
+    present is left as-is). No-op for commands that don't invoke powershell."""
+    if not re.search(r"(?i)\bpowershell(\.exe)?\b", cmd):
+        return cmd
+    out = cmd
+    # Outer powershell: ensure -WindowStyle Hidden appears before the payload arg
+    # (-Command / -EncodedCommand / -File), inserted after -NoProfile when present.
+    payload = re.search(r"(?i)\s-(Command|EncodedCommand|File)\b", out)
+    head_end = payload.start() if payload else len(out)
+    if not re.search(r"(?i)-WindowStyle\s+Hidden", out[:head_end]):
+        noprofile = re.search(r"(?i)-NoProfile\b", out[:head_end])
+        ins = noprofile.end() if noprofile else re.search(r"(?i)powershell(\.exe)?", out).end()
+        out = out[:ins] + " -WindowStyle Hidden" + out[ins:]
+    # Inner Start-Process (launches the real worker): ensure it is hidden too.
+    sp = re.search(r"(?i)Start-Process\b", out)
+    if sp and not re.search(r"(?i)-WindowStyle\s+Hidden", out[sp.end():]):
+        out = out[:sp.end()] + " -WindowStyle Hidden" + out[sp.end():]
+    return out
+
+
+def harden_powershell_hooks(path: Path, dry_run: bool) -> bool:
+    """Ensure every powershell hook command in a hooks JSON is launched windowless
+    (`-WindowStyle Hidden`), including any inner `Start-Process`, so hooks don't
+    flash a console and steal keyboard focus. Only rewrites commands that invoke
+    powershell; leaves everything else alone. Idempotent; backs up; returns
+    changed. (Complements repoint_hook_commands, which makes the `mempalace hook
+    run` commands launch the windowless pythonw.exe.)"""
+    path = Path(path)
+    if not path.is_file():
+        return False
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    changed = False
+
+    def fix(node):
+        nonlocal changed
+        if isinstance(node, dict):
+            cmd = node.get("command")
+            if isinstance(cmd, str):
+                new = _inject_windowstyle_hidden(cmd)
+                if new != cmd:
+                    node["command"] = new
+                    changed = True
+            for v in node.values():
+                fix(v)
+        elif isinstance(node, list):
+            for v in node:
+                fix(v)
+
+    fix(data)
+    if not changed:
+        return False
+    if dry_run:
+        return True
+    backup_file(path)
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    return True
+
+
 def repoint_codex_toml(path: Path, venv_python: str, harness: str, dry_run: bool) -> bool:
     """Targeted edit of the [mcp_servers.mempalace] block in a Codex config.toml:
     set command to the venv python and ensure an env table with MEMPALACE_HARNESS.
@@ -543,6 +610,7 @@ def run_install(args) -> int:
     ensure_json_mcp_server(HOME_CLAUDE_JSON, "mempalace", args.venv_python, "claude-code", args.dry_run)
     repoint_json_mcp(HOME_CLAUDE_JSON, "mempalace", args.venv_python, "claude-code", args.dry_run)
     repoint_hook_commands(CLAUDE_SETTINGS, args.venv_python, "claude-code", args.dry_run)
+    harden_powershell_hooks(CLAUDE_SETTINGS, args.dry_run)  # windowless powershell launchers
     ensure_codex_mempalace_server(CODEX_CONFIG, args.venv_python, "codex", args.dry_run)
     repoint_codex_toml(CODEX_CONFIG, args.venv_python, "codex", args.dry_run)
     repoint_hook_commands(CODEX_HOOKS, args.venv_python, "codex", args.dry_run)
