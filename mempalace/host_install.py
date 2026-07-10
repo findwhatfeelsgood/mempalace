@@ -119,10 +119,24 @@ _HOOK_RE = re.compile(
 )
 
 
+def _windowless_python(py: str) -> str:
+    """Prefer pythonw.exe over python.exe for HOOK commands on Windows.
+
+    The console python.exe pops a window (stealing keyboard focus) every time the
+    harness fires the hook — many times per session. pythonw.exe is the windowless
+    twin; the harness still launches the hook with a stdout pipe, so blocking hooks
+    that return JSON / a non-zero exit keep working — only the flashing window goes
+    away. No-op for non-python.exe interpreters (e.g. POSIX)."""
+    if py.lower().endswith("python.exe"):
+        return py[: -len("python.exe")] + "pythonw.exe"
+    return py
+
+
 def repoint_hook_commands(path: Path, venv_python: str, harness: str, dry_run: bool) -> bool:
     """Rewrite any 'mempalace hook run' command in a hooks JSON to use the explicit
     venv python (QUOTED, so paths with spaces like C:\\Program Files\\... work as a
-    single shell token) and the given harness. Leaves non-mempalace commands alone.
+    single shell token) and the given harness. Hooks launch the WINDOWLESS pythonw.exe
+    so they don't flash a console. Leaves non-mempalace commands alone.
     Idempotent; backs up; returns changed."""
     path = Path(path)
     if not path.is_file():
@@ -140,7 +154,7 @@ def repoint_hook_commands(path: Path, venv_python: str, harness: str, dry_run: b
             if isinstance(cmd, str):
                 m = _HOOK_RE.match(cmd.strip())
                 if m:
-                    new = f'"{venv_python}" -m mempalace hook run --hook {m["hook"]} --harness {harness}'
+                    new = f'"{_windowless_python(venv_python)}" -m mempalace hook run --hook {m["hook"]} --harness {harness}'
                     if new != cmd:
                         node["command"] = new
                         changed = True

@@ -6,6 +6,7 @@ import yaml
 from mempalace import host_install as hi
 
 VENV = r"C:\dev\mempalace\.venv\Scripts\python.exe"
+VENVW = r"C:\dev\mempalace\.venv\Scripts\pythonw.exe"
 
 
 def test_backup_file_copies_with_timestamp(tmp_path):
@@ -129,17 +130,28 @@ def test_repoint_hooks_explicit_python_and_harness(tmp_path):
     p = _hooks_fixture(tmp_path, "claude-code")          # codex file had wrong harness
     assert hi.repoint_hook_commands(p, VENV, "codex", dry_run=False) is True
     cmd = json.loads(p.read_text(encoding="utf-8"))["hooks"]["Stop"][0]["hooks"][0]["command"]
-    assert cmd == f'"{VENV}" -m mempalace hook run --hook stop --harness codex'
+    assert cmd == f'"{VENVW}" -m mempalace hook run --hook stop --harness codex'
 
 
 def test_repoint_hooks_quotes_python_with_spaces(tmp_path):
     p = _hooks_fixture(tmp_path, "claude-code")
     spaced = r"C:\Program Files\mp\.venv\Scripts\python.exe"
+    spaced_w = r"C:\Program Files\mp\.venv\Scripts\pythonw.exe"
     assert hi.repoint_hook_commands(p, spaced, "claude-code", dry_run=False) is True
     cmd = json.loads(p.read_text(encoding="utf-8"))["hooks"]["Stop"][0]["hooks"][0]["command"]
-    assert cmd == f'"{spaced}" -m mempalace hook run --hook stop --harness claude-code'
+    assert cmd == f'"{spaced_w}" -m mempalace hook run --hook stop --harness claude-code'
     # idempotent even with the quoted, space-containing path
     assert hi.repoint_hook_commands(p, spaced, "claude-code", dry_run=False) is False
+
+
+def test_repoint_hooks_uses_windowless_pythonw(tmp_path):
+    """Hook commands launch the windowless pythonw.exe (no console flash);
+    python.exe is rewritten to pythonw.exe."""
+    p = _hooks_fixture(tmp_path, "claude-code")
+    hi.repoint_hook_commands(p, VENV, "claude-code", dry_run=False)
+    cmd = json.loads(p.read_text(encoding="utf-8"))["hooks"]["Stop"][0]["hooks"][0]["command"]
+    assert cmd.startswith(f'"{VENVW}"')
+    assert '\\python.exe"' not in cmd
 
 
 def test_repoint_hooks_idempotent(tmp_path):
