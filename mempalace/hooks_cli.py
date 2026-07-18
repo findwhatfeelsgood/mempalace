@@ -212,6 +212,23 @@ def hook_session_start(data: dict, harness: str):
     _output({})
 
 
+def hook_session_end(data: dict, harness: str):
+    """Session end hook: remove this session's save-point marker so
+    hook_state never accumulates stale per-session files."""
+    parsed = _parse_harness_input(data, harness)
+    session_id = parsed["session_id"]
+
+    _log(f"SESSION END for session {session_id}")
+
+    if session_id != "unknown":
+        try:
+            (STATE_DIR / f"{session_id}_last_save").unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    _output({})
+
+
 def hook_precompact(data: dict, harness: str):
     """Precompact hook: always block with comprehensive save instruction."""
     parsed = _parse_harness_input(data, harness)
@@ -256,6 +273,7 @@ def run_hook(hook_name: str, harness: str):
 
     hooks = {
         "session-start": hook_session_start,
+        "session-end": hook_session_end,
         "stop": hook_stop,
         "precompact": hook_precompact,
     }
