@@ -544,22 +544,29 @@ The AI learns AAAK and the memory protocol automatically from the `mempalace_sta
 
 ## Auto-Save Hooks
 
-Two hooks for Claude Code that automatically save memories during work:
+Hooks for Claude Code that automatically save memories during work:
 
-**Save Hook** — every 15 messages, triggers a structured save. Topics, decisions, quotes, code changes. Also regenerates the critical facts layer.
+**Save Hook** — every 15 human messages, triggers a structured save. Topics, decisions, quotes, code changes. Also regenerates the critical facts layer.
 
 **PreCompact Hook** — fires before context compression. Emergency save before the window shrinks.
+
+**Session-End Hook** — housekeeping: deletes the session's save-point marker on exit so `hook_state/` stays clean. Never blocks.
+
+The hooks run the installed package directly (use your venv's interpreter; on Windows prefer `pythonw.exe` for windowless launches — `scripts/install_host.py` sets this up automatically):
 
 ```json
 {
   "hooks": {
-    "Stop": [{"matcher": "", "hooks": [{"type": "command", "command": "/path/to/mempalace/hooks/mempal_save_hook.sh"}]}],
-    "PreCompact": [{"matcher": "", "hooks": [{"type": "command", "command": "/path/to/mempalace/hooks/mempal_precompact_hook.sh"}]}]
+    "Stop": [{"hooks": [{"type": "command", "command": "\"/path/to/venv/bin/python\" -m mempalace hook run --hook stop --harness claude-code"}]}],
+    "PreCompact": [{"hooks": [{"type": "command", "command": "\"/path/to/venv/bin/python\" -m mempalace hook run --hook precompact --harness claude-code"}]}],
+    "SessionEnd": [{"hooks": [{"type": "command", "command": "\"/path/to/venv/bin/python\" -m mempalace hook run --hook session-end --harness claude-code"}]}]
   }
 }
 ```
 
-**Optional auto-ingest:** Set the `MEMPAL_DIR` environment variable to a directory path and the hooks will automatically run `mempalace mine` on that directory during each save trigger (background on stop, synchronous on precompact).
+**Optional auto-ingest:** Set the `MEMPAL_DIR` environment variable to a directory path and the hooks will automatically run `mempalace mine` on that directory during each save trigger (background on stop, synchronous on precompact). Set `MEMPAL_HOOK_DEBUG=1` for diagnostic logging to `~/.mempalace/hook_state/hook.log` (off by default).
+
+See [hooks/README.md](hooks/README.md) for the full guide.
 
 ---
 

@@ -14,83 +14,82 @@ The AI does the actual filing — it knows the conversation context, so it class
 
 ## Install — Claude Code
 
-Add to `.claude/settings.local.json`:
+The hooks are plain CLI invocations of the installed Python package — no
+shell scripts, nothing to `chmod`. Use the interpreter of the environment
+where mempalace is installed (a venv is typical). On Windows, prefer the
+venv's `pythonw.exe` — it is windowless, so the hook doesn't flash a console
+window every time it fires.
+
+Add to `~/.claude/settings.json` (all projects) or
+`.claude/settings.local.json` (one project):
 
 ```json
 {
   "hooks": {
     "Stop": [{
-      "matcher": "*",
       "hooks": [{
         "type": "command",
-        "command": "/absolute/path/to/hooks/mempal_save_hook.sh",
-        "timeout": 30
+        "command": "\"/path/to/venv/bin/python\" -m mempalace hook run --hook stop --harness claude-code"
       }]
     }],
     "PreCompact": [{
       "hooks": [{
         "type": "command",
-        "command": "/absolute/path/to/hooks/mempal_precompact_hook.sh",
-        "timeout": 30
+        "command": "\"/path/to/venv/bin/python\" -m mempalace hook run --hook precompact --harness claude-code"
+      }]
+    }],
+    "SessionEnd": [{
+      "hooks": [{
+        "type": "command",
+        "command": "\"/path/to/venv/bin/python\" -m mempalace hook run --hook session-end --harness claude-code"
       }]
     }]
   }
 }
 ```
 
-Make them executable:
-```bash
-chmod +x hooks/mempal_save_hook.sh hooks/mempal_precompact_hook.sh
-```
+Quote the interpreter path so paths with spaces survive shell tokenization.
+Restart Claude Code afterwards — hooks load at session start.
+
+**Automated install:** `python scripts/install_host.py` bootstraps the venv
+and rewrites any existing `mempalace hook run` commands in your settings to
+that venv's windowless interpreter — idempotent, with backups.
 
 ## Install — Codex CLI
 
-Add to `.codex/hooks.json`:
+Add to `.codex/hooks.json`, same CLI form with the `codex` harness:
 
 ```json
 {
   "Stop": [{
     "type": "command",
-    "command": "/absolute/path/to/hooks/mempal_save_hook.sh",
-    "timeout": 30
+    "command": "python3 -m mempalace hook run --hook stop --harness codex"
   }],
   "PreCompact": [{
     "type": "command",
-    "command": "/absolute/path/to/hooks/mempal_precompact_hook.sh",
-    "timeout": 30
+    "command": "python3 -m mempalace hook run --hook precompact --harness codex"
   }]
 }
 ```
 
 ## Configuration
 
-Edit `mempal_save_hook.sh` to change:
+Constants in `mempalace/hooks_cli.py`:
 
-- **`SAVE_INTERVAL=15`** — How many messages between saves. Lower = more frequent, higher = less interruption.
-- **`STATE_DIR`** — Where hook state is stored (defaults to `~/.mempalace/hook_state/`)
+- **`SAVE_INTERVAL = 15`** — How many human messages between saves. Lower = more frequent, higher = less interruption. (Tool results in the transcript are not counted — only real human messages.)
+- **`STATE_DIR`** — Where hook state is stored (`~/.mempalace/hook_state/`).
+
+Environment variables:
+
 - **`MEMPAL_DIR`** — Optional. Set to a conversations directory to auto-run `mempalace mine` on each save trigger.
 - **`MEMPAL_HOOK_DEBUG`** — Optional. Set to enable diagnostic logging to `~/.mempalace/hook_state/hook.log`; unset, the hooks write no log.
 
 ## Session-End Hook
 
-Claude Code only: register the cleanup hook under the `SessionEnd` event so
-each session deletes its own `{session_id}_last_save` marker on exit:
-
-```json
-{
-  "hooks": {
-    "SessionEnd": [{
-      "hooks": [{
-        "type": "command",
-        "command": "python -m mempalace hook run --hook session-end --harness claude-code"
-      }]
-    }]
-  }
-}
-```
-
-It never blocks and produces no output. Without it, markers (2-byte files)
-accumulate harmlessly in `~/.mempalace/hook_state/`.
+Claude Code only: the `SessionEnd` entry above is housekeeping — each session
+deletes its own `{session_id}_last_save` marker on exit. It never blocks and
+produces no output. Without it, markers (2-byte files) accumulate harmlessly
+in `~/.mempalace/hook_state/`.
 
 ## How It Works
 

@@ -14,84 +14,86 @@ The AI does the actual filing — it knows the conversation context, so it class
 
 ## Install — Claude Code
 
-Add to `.claude/settings.local.json`:
+The hooks are plain CLI invocations of the installed Python package — there
+are no shell scripts to copy or `chmod`. Use the interpreter of the
+environment where mempalace is installed (a venv is typical). On Windows,
+prefer the venv's `pythonw.exe` — it is windowless, so the hook doesn't flash
+a console and steal keyboard focus every time it fires.
+
+Add to `~/.claude/settings.json` (all projects) or
+`.claude/settings.local.json` (one project):
 
 ```json
 {
   "hooks": {
     "Stop": [{
-      "matcher": "*",
       "hooks": [{
         "type": "command",
-        "command": "/absolute/path/to/hooks/mempal_save_hook.sh",
-        "timeout": 30
+        "command": "\"/path/to/venv/bin/python\" -m mempalace hook run --hook stop --harness claude-code"
       }]
     }],
     "PreCompact": [{
       "hooks": [{
         "type": "command",
-        "command": "/absolute/path/to/hooks/mempal_precompact_hook.sh",
-        "timeout": 30
+        "command": "\"/path/to/venv/bin/python\" -m mempalace hook run --hook precompact --harness claude-code"
+      }]
+    }],
+    "SessionEnd": [{
+      "hooks": [{
+        "type": "command",
+        "command": "\"/path/to/venv/bin/python\" -m mempalace hook run --hook session-end --harness claude-code"
       }]
     }]
   }
 }
 ```
 
-Make them executable:
-```bash
-chmod +x hooks/mempal_save_hook.sh hooks/mempal_precompact_hook.sh
-```
+Quote the interpreter path (as above) so paths containing spaces survive
+shell tokenization. Restart Claude Code afterwards — hooks load at session
+start.
+
+**Automated install:** `python scripts/install_host.py` bootstraps the venv
+and rewrites any existing `mempalace hook run` commands in your settings to
+that venv's windowless interpreter — idempotent, with backups.
 
 ## Install — Codex CLI (OpenAI)
 
-Add to `.codex/hooks.json`:
+Add to `.codex/hooks.json`, using the same CLI form with the `codex` harness:
 
 ```json
 {
   "Stop": [{
     "type": "command",
-    "command": "/absolute/path/to/hooks/mempal_save_hook.sh",
-    "timeout": 30
+    "command": "python3 -m mempalace hook run --hook stop --harness codex"
   }],
   "PreCompact": [{
     "type": "command",
-    "command": "/absolute/path/to/hooks/mempal_precompact_hook.sh",
-    "timeout": 30
+    "command": "python3 -m mempalace hook run --hook precompact --harness codex"
   }]
 }
 ```
 
+(The `.codex-plugin/hooks/` wrapper scripts do exactly this and can be used
+instead if your Codex setup passes hook input via a file.)
+
 ## Configuration
 
-Edit `mempal_save_hook.sh` to change:
+Constants in `mempalace/hooks_cli.py`:
 
-- **`SAVE_INTERVAL=15`** — How many human messages between saves. Lower = more frequent saves, higher = less interruption.
-- **`STATE_DIR`** — Where hook state is stored (defaults to `~/.mempalace/hook_state/`)
-- **`MEMPAL_DIR`** — Optional. Set to a conversations directory to auto-run `mempalace mine <dir>` on each save trigger. Leave blank (default) to let the AI handle saving via the block reason message.
+- **`SAVE_INTERVAL = 15`** — How many human messages between saves. Lower = more frequent saves, higher = less interruption. (Tool results in the transcript are not counted — only real human messages.)
+- **`STATE_DIR`** — Where hook state is stored (`~/.mempalace/hook_state/`).
+
+Environment variables:
+
+- **`MEMPAL_DIR`** — Optional. Set to a conversations directory to auto-run `mempalace mine <dir>` on each save trigger. Leave unset (default) to let the AI handle saving via the block reason message.
 - **`MEMPAL_HOOK_DEBUG`** — Optional. Set (e.g. `=1`) to enable diagnostic logging to `~/.mempalace/hook_state/hook.log`. Unset (default), the hooks write no log at all.
 
 ### Session-End Hook (Claude Code)
 
-Register the cleanup hook under the `SessionEnd` event, using the same
-command form as the others:
-
-```json
-{
-  "hooks": {
-    "SessionEnd": [{
-      "hooks": [{
-        "type": "command",
-        "command": "python -m mempalace hook run --hook session-end --harness claude-code"
-      }]
-    }]
-  }
-}
-```
-
-Each session then removes its own `{session_id}_last_save` marker on exit.
-Without it, markers are 2-byte files that accumulate harmlessly in
-`~/.mempalace/hook_state/` — cleanup is cosmetic, not required.
+The `SessionEnd` entry above is housekeeping: each session removes its own
+`{session_id}_last_save` marker on exit. Without it, markers are 2-byte files
+that accumulate harmlessly in `~/.mempalace/hook_state/` — cleanup is
+cosmetic, not required.
 
 ### mempalace CLI
 
@@ -102,7 +104,8 @@ mempalace mine <dir>               # Mine all files in a directory
 mempalace mine <dir> --mode convos # Mine conversation transcripts only
 ```
 
-The hooks resolve the repo root automatically from their own path, so they work regardless of where you install the repo.
+The hook commands run the installed `mempalace` package via `-m`, so they work
+from any working directory — no repo paths involved.
 
 ## How It Works (Technical)
 
