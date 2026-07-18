@@ -17,6 +17,7 @@ from mempalace.hooks_cli import (
     _sanitize_session_id,
     hook_stop,
     hook_session_start,
+    hook_session_end,
     hook_precompact,
     run_hook,
 )
@@ -87,6 +88,32 @@ def test_count_handles_list_content(tmp_path):
         ],
     )
     assert _count_human_messages(str(transcript)) == 1
+
+
+def test_count_skips_tool_results(tmp_path):
+    """Claude Code records tool results as user-role messages; they must not
+    count toward SAVE_INTERVAL or tool-heavy sessions block on every stop."""
+    transcript = tmp_path / "t.jsonl"
+    _write_transcript(
+        transcript,
+        [
+            {"message": {"role": "user", "content": "real question"}},
+            {
+                "message": {
+                    "role": "user",
+                    "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}],
+                }
+            },
+            {
+                "message": {
+                    "role": "user",
+                    "content": [{"type": "tool_result", "tool_use_id": "t2", "content": "ok"}],
+                }
+            },
+            {"message": {"role": "user", "content": [{"type": "text", "text": "another"}]}},
+        ],
+    )
+    assert _count_human_messages(str(transcript)) == 2
 
 
 def test_count_missing_file():
@@ -217,9 +244,21 @@ def test_precompact_always_blocks(tmp_path):
 # --- _log ---
 
 
-def test_log_writes_to_hook_log(tmp_path):
+def test_log_silent_by_default(tmp_path):
+    """Without MEMPAL_HOOK_DEBUG, _log writes nothing at all."""
     with patch("mempalace.hooks_cli.STATE_DIR", tmp_path):
-        _log("test message")
+        with patch.dict("os.environ", {}, clear=False):
+            import os
+
+            os.environ.pop("MEMPAL_HOOK_DEBUG", None)
+            _log("test message")
+    assert not (tmp_path / "hook.log").exists()
+
+
+def test_log_writes_to_hook_log_when_debug(tmp_path):
+    with patch("mempalace.hooks_cli.STATE_DIR", tmp_path):
+        with patch.dict("os.environ", {"MEMPAL_HOOK_DEBUG": "1"}):
+            _log("test message")
     log_path = tmp_path / "hook.log"
     assert log_path.is_file()
     content = log_path.read_text()
@@ -281,6 +320,42 @@ def test_parse_harness_input_valid():
     )
     assert result["session_id"] == "abc-123"
     assert result["stop_hook_active"] is True
+
+
+def test_parse_harness_input_gemini():
+    """Gemini CLI sends Claude-Code-shaped hook JSON."""
+    result = _parse_harness_input({"session_id": "gem-1"}, "gemini")
+    assert result["session_id"] == "gem-1"
+    assert result["stop_hook_active"] is False
+
+
+def test_precompact_blocks_under_gemini(tmp_path):
+    result = _capture_hook_output(
+        hook_precompact, {"session_id": "gem-1"}, harness="gemini", state_dir=tmp_path
+    )
+    assert result["decision"] == "block"
+    assert result["reason"] == PRECOMPACT_BLOCK_REASON
+
+
+# --- hook_session_end ---
+
+
+def test_session_end_removes_own_marker_only(tmp_path):
+    (tmp_path / "end-1_last_save").write_text("30")
+    (tmp_path / "other_last_save").write_text("15")
+    result = _capture_hook_output(
+        hook_session_end, {"session_id": "end-1"}, state_dir=tmp_path
+    )
+    assert result == {}
+    assert not (tmp_path / "end-1_last_save").exists()
+    assert (tmp_path / "other_last_save").exists()
+
+
+def test_session_end_missing_marker_is_noop(tmp_path):
+    result = _capture_hook_output(
+        hook_session_end, {"session_id": "never-saved"}, state_dir=tmp_path
+    )
+    assert result == {}
 
 
 # --- hook_stop with OSError on write ---

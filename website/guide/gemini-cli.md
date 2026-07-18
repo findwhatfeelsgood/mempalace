@@ -61,7 +61,7 @@ Add a `PreCompress` hook to `~/.gemini/settings.json`:
         "hooks": [
           {
             "type": "command",
-            "command": "/absolute/path/to/mempalace/hooks/mempal_precompact_hook.sh"
+            "command": "/absolute/path/to/mempalace/.venv/bin/python3 -m mempalace hook run --hook precompact --harness gemini"
           }
         ]
       }
@@ -70,10 +70,9 @@ Add a `PreCompress` hook to `~/.gemini/settings.json`:
 }
 ```
 
-Make sure the hook scripts are executable:
-```bash
-chmod +x hooks/*.sh
-```
+The hook runs the installed package directly — nothing to `chmod`. (The
+legacy `hooks/mempal_precompact_hook.sh` script still works if you prefer
+it.)
 
 ## Usage
 

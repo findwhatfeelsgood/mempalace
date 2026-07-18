@@ -151,7 +151,7 @@ mempalace hook run --hook session-start --harness codex
 | Option | Values | Description |
 |--------|--------|-------------|
 | `--hook` | `session-start`, `session-end`, `stop`, `precompact` | Hook name |
-| `--harness` | `claude-code`, `codex` | Harness type |
+| `--harness` | `claude-code`, `codex`, `gemini` | Harness type |
 
 ## `mempalace instructions`
 

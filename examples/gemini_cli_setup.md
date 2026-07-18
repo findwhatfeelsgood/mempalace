@@ -62,7 +62,7 @@ Edit your `~/.gemini/settings.json` and add the following:
         "hooks": [
           {
             "type": "command",
-            "command": "/absolute/path/to/mempalace/hooks/mempal_precompact_hook.sh"
+            "command": "/absolute/path/to/mempalace/.venv/bin/python3 -m mempalace hook run --hook precompact --harness gemini"
           }
         ]
       }
@@ -71,10 +71,9 @@ Edit your `~/.gemini/settings.json` and add the following:
 }
 ```
 
-Make sure the hook scripts are executable:
-```bash
-chmod +x hooks/*.sh
-```
+The hook runs the installed package directly — nothing to `chmod`. (The
+legacy `hooks/mempal_precompact_hook.sh` script still works if you prefer
+it.)
 
 ## 5. Usage
 

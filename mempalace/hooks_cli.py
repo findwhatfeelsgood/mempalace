@@ -2,8 +2,12 @@
 Hook logic for MemPalace — Python implementation of session-start, stop, and precompact hooks.
 
 Reads JSON from stdin, outputs JSON to stdout.
-Supported hooks: session-start, stop, precompact
-Supported harnesses: claude-code, codex (extensible to cursor, gemini, etc.)
+Supported hooks: session-start, session-end, stop, precompact
+Supported harnesses: claude-code, codex, gemini (extensible to cursor, etc.)
+
+Gemini CLI's hook system is Claude-Code-compatible: same settings schema,
+same stdin JSON fields, same decision/reason output. Its compaction event is
+named PreCompress (register the precompact hook under that event).
 """
 
 import json
@@ -137,7 +141,7 @@ def _maybe_auto_ingest():
             pass
 
 
-SUPPORTED_HARNESSES = {"claude-code", "codex"}
+SUPPORTED_HARNESSES = {"claude-code", "codex", "gemini"}
 
 
 def _parse_harness_input(data: dict, harness: str) -> dict:
