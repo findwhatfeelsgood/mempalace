@@ -144,12 +144,13 @@ Run hook logic for Claude Code / Codex integration.
 ```bash
 mempalace hook run --hook stop --harness claude-code
 mempalace hook run --hook precompact --harness claude-code
+mempalace hook run --hook session-end --harness claude-code
 mempalace hook run --hook session-start --harness codex
 ```
 
 | Option | Values | Description |
 |--------|--------|-------------|
-| `--hook` | `session-start`, `stop`, `precompact` | Hook name |
+| `--hook` | `session-start`, `session-end`, `stop`, `precompact` | Hook name |
 | `--harness` | `claude-code`, `codex` | Harness type |
 
 ## `mempalace instructions`

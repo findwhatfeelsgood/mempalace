@@ -8,6 +8,7 @@ Two hooks for Claude Code and Codex that automatically save memories during work
 |------|--------------|-------------|
 | **Save Hook** | Every 15 human messages | Blocks the AI, tells it to save key topics/decisions/quotes to the palace |
 | **PreCompact Hook** | Right before context compaction | Emergency save — forces the AI to save everything before losing context |
+| **Session-End Hook** | When the session ends | Housekeeping — deletes the session's save-point marker so `hook_state/` never accumulates stale files. Never blocks. |
 
 The AI does the actual filing — it knows the conversation context, so it classifies memories into the right wings/halls/closets. The hooks just tell it **when** to save.
 
@@ -68,6 +69,28 @@ Edit `mempal_save_hook.sh` to change:
 - **`SAVE_INTERVAL=15`** — How many messages between saves. Lower = more frequent, higher = less interruption.
 - **`STATE_DIR`** — Where hook state is stored (defaults to `~/.mempalace/hook_state/`)
 - **`MEMPAL_DIR`** — Optional. Set to a conversations directory to auto-run `mempalace mine` on each save trigger.
+- **`MEMPAL_HOOK_DEBUG`** — Optional. Set to enable diagnostic logging to `~/.mempalace/hook_state/hook.log`; unset, the hooks write no log.
+
+## Session-End Hook
+
+Claude Code only: register the cleanup hook under the `SessionEnd` event so
+each session deletes its own `{session_id}_last_save` marker on exit:
+
+```json
+{
+  "hooks": {
+    "SessionEnd": [{
+      "hooks": [{
+        "type": "command",
+        "command": "python -m mempalace hook run --hook session-end --harness claude-code"
+      }]
+    }]
+  }
+}
+```
+
+It never blocks and produces no output. Without it, markers (2-byte files)
+accumulate harmlessly in `~/.mempalace/hook_state/`.
 
 ## How It Works
 
@@ -98,6 +121,9 @@ Context window full → PreCompact fires → ALWAYS blocks → AI saves → Comp
 No counting needed — compaction always warrants a save.
 
 ## Debugging
+
+Logging is off by default — set `MEMPAL_HOOK_DEBUG=1` in the environment
+Claude Code runs under, then:
 
 ```bash
 cat ~/.mempalace/hook_state/hook.log

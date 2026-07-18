@@ -8,6 +8,7 @@ These hook scripts make MemPalace save automatically. No manual "save" commands 
 |------|--------------|-------------|
 | **Save Hook** | Every 15 human messages | Blocks the AI, tells it to save key topics/decisions/quotes to the palace |
 | **PreCompact Hook** | Right before context compaction | Emergency save — forces the AI to save EVERYTHING before losing context |
+| **Session-End Hook** | When the session ends | Housekeeping — deletes the session's save-point marker from `hook_state/` so stale per-session files never accumulate. Never blocks. |
 
 The AI does the actual filing — it knows the conversation context, so it classifies memories into the right wings/halls/closets. The hooks just tell it WHEN to save.
 
@@ -68,6 +69,29 @@ Edit `mempal_save_hook.sh` to change:
 - **`SAVE_INTERVAL=15`** — How many human messages between saves. Lower = more frequent saves, higher = less interruption.
 - **`STATE_DIR`** — Where hook state is stored (defaults to `~/.mempalace/hook_state/`)
 - **`MEMPAL_DIR`** — Optional. Set to a conversations directory to auto-run `mempalace mine <dir>` on each save trigger. Leave blank (default) to let the AI handle saving via the block reason message.
+- **`MEMPAL_HOOK_DEBUG`** — Optional. Set (e.g. `=1`) to enable diagnostic logging to `~/.mempalace/hook_state/hook.log`. Unset (default), the hooks write no log at all.
+
+### Session-End Hook (Claude Code)
+
+Register the cleanup hook under the `SessionEnd` event, using the same
+command form as the others:
+
+```json
+{
+  "hooks": {
+    "SessionEnd": [{
+      "hooks": [{
+        "type": "command",
+        "command": "python -m mempalace hook run --hook session-end --harness claude-code"
+      }]
+    }]
+  }
+}
+```
+
+Each session then removes its own `{session_id}_last_save` marker on exit.
+Without it, markers are 2-byte files that accumulate harmlessly in
+`~/.mempalace/hook_state/` — cleanup is cosmetic, not required.
 
 ### mempalace CLI
 
@@ -120,7 +144,8 @@ No counting needed — compaction always warrants a save.
 
 ## Debugging
 
-Check the hook log:
+Logging is off by default. Enable it by setting `MEMPAL_HOOK_DEBUG=1` in the
+environment Claude Code runs under, then check the hook log:
 ```bash
 cat ~/.mempalace/hook_state/hook.log
 ```
