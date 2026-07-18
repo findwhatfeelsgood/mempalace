@@ -90,8 +90,15 @@ def _count_human_messages(transcript_path: str) -> int:
     return count
 
 
+def _debug_enabled() -> bool:
+    """Hook logging is opt-in via MEMPAL_HOOK_DEBUG to keep hook_state clean."""
+    return bool(os.environ.get("MEMPAL_HOOK_DEBUG"))
+
+
 def _log(message: str):
-    """Append to hook state log file."""
+    """Append to hook state log file (no-op unless MEMPAL_HOOK_DEBUG is set)."""
+    if not _debug_enabled():
+        return
     try:
         STATE_DIR.mkdir(parents=True, exist_ok=True)
         log_path = STATE_DIR / "hook.log"
@@ -112,12 +119,19 @@ def _maybe_auto_ingest():
     mempal_dir = os.environ.get("MEMPAL_DIR", "")
     if mempal_dir and os.path.isdir(mempal_dir):
         try:
-            log_path = STATE_DIR / "hook.log"
-            with open(log_path, "a") as log_f:
+            if _debug_enabled():
+                STATE_DIR.mkdir(parents=True, exist_ok=True)
+                with open(STATE_DIR / "hook.log", "a") as log_f:
+                    subprocess.Popen(
+                        [sys.executable, "-m", "mempalace", "mine", mempal_dir],
+                        stdout=log_f,
+                        stderr=log_f,
+                    )
+            else:
                 subprocess.Popen(
                     [sys.executable, "-m", "mempalace", "mine", mempal_dir],
-                    stdout=log_f,
-                    stderr=log_f,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
                 )
         except OSError:
             pass
@@ -209,12 +223,20 @@ def hook_precompact(data: dict, harness: str):
     mempal_dir = os.environ.get("MEMPAL_DIR", "")
     if mempal_dir and os.path.isdir(mempal_dir):
         try:
-            log_path = STATE_DIR / "hook.log"
-            with open(log_path, "a") as log_f:
+            if _debug_enabled():
+                STATE_DIR.mkdir(parents=True, exist_ok=True)
+                with open(STATE_DIR / "hook.log", "a") as log_f:
+                    subprocess.run(
+                        [sys.executable, "-m", "mempalace", "mine", mempal_dir],
+                        stdout=log_f,
+                        stderr=log_f,
+                        timeout=60,
+                    )
+            else:
                 subprocess.run(
                     [sys.executable, "-m", "mempalace", "mine", mempal_dir],
-                    stdout=log_f,
-                    stderr=log_f,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
                     timeout=60,
                 )
         except OSError:
