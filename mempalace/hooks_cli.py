@@ -61,6 +61,14 @@ def _count_human_messages(transcript_path: str) -> int:
                             if "<command-message>" in content:
                                 continue
                         elif isinstance(content, list):
+                            # Claude Code records tool results as user-role
+                            # messages; counting them makes SAVE_INTERVAL trip
+                            # on every stop in tool-heavy sessions.
+                            if any(
+                                isinstance(b, dict) and b.get("type") == "tool_result"
+                                for b in content
+                            ):
+                                continue
                             text = " ".join(
                                 b.get("text", "") for b in content if isinstance(b, dict)
                             )
