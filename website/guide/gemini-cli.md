@@ -70,9 +70,7 @@ Add a `PreCompress` hook to `~/.gemini/settings.json`:
 }
 ```
 
-The hook runs the installed package directly — nothing to `chmod`. (The
-legacy `hooks/mempal_precompact_hook.sh` script still works if you prefer
-it.)
+The hook runs the installed package directly — nothing to `chmod`.
 
 ## Usage
 

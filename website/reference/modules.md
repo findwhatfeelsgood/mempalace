@@ -35,9 +35,8 @@ mempalace/
 │   ├── locomo_bench.py        ← LoCoMo runner
 │   ├── membench_bench.py      ← MemBench runner
 │   └── convomem_bench.py      ← ConvoMem runner
-├── hooks/                     ← Claude Code auto-save hooks
-│   ├── mempal_save_hook.sh    ← save every N messages
-│   └── mempal_precompact_hook.sh ← emergency save
+├── hooks/                     ← auto-save hook setup guide
+│   └── README.md              ← hooks run via `mempalace hook run`
 ├── examples/                  ← usage examples
 │   ├── basic_mining.py
 │   ├── convo_import.py

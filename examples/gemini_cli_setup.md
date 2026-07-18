@@ -71,9 +71,7 @@ Edit your `~/.gemini/settings.json` and add the following:
 }
 ```
 
-The hook runs the installed package directly — nothing to `chmod`. (The
-legacy `hooks/mempal_precompact_hook.sh` script still works if you prefer
-it.)
+The hook runs the installed package directly — nothing to `chmod`.
 
 ## 5. Usage
 

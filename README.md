@@ -686,8 +686,7 @@ Plain text. Becomes Layer 0 — loaded every session.
 | `entity_registry.py` | Entity code registry |
 | `entity_detector.py` | Auto-detect people and projects from content |
 | `split_mega_files.py` | Split concatenated transcripts into per-session files |
-| `hooks/mempal_save_hook.sh` | Auto-save every N messages |
-| `hooks/mempal_precompact_hook.sh` | Emergency save before compaction |
+| `hooks_cli.py` | Auto-save hooks (stop / precompact / session-end) — run via `mempalace hook run` |
 
 ---
 
@@ -713,10 +712,8 @@ mempalace/
 │   ├── longmemeval_bench.py   ← LongMemEval runner
 │   ├── locomo_bench.py        ← LoCoMo runner
 │   └── membench_bench.py      ← MemBench runner
-├── hooks/                     ← Claude Code auto-save hooks
-│   ├── README.md              ← hook setup guide
-│   ├── mempal_save_hook.sh    ← save every N messages
-│   └── mempal_precompact_hook.sh ← emergency save
+├── hooks/                     ← auto-save hook setup guide
+│   └── README.md              ← hooks run via `mempalace hook run`
 ├── examples/                  ← usage examples
 │   ├── basic_mining.py
 │   ├── convo_import.py

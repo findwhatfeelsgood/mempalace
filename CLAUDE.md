@@ -90,9 +90,8 @@ mempalace/
 ├── split_mega_files.py  # Split concatenated transcript files
 └── version.py           # Single source of truth for version
 
-hooks/                   # Claude Code hook scripts
-├── mempal_save_hook.sh        # Stop: triggers diary save
-└── mempal_precompact_hook.sh  # PreCompact: saves state before compression
+hooks/                   # Hook setup guide (hooks run via `mempalace hook run` — hooks_cli.py)
+└── README.md
 ```
 
 ## Conventions
